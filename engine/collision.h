@@ -5,6 +5,13 @@
 namespace Doritos::Engine {
 struct Triangle { XMFLOAT3 a,b,c; };
 struct RayHit { float distance=0; XMFLOAT3 position{},normal{}; uint32_t triangle=0; };
+struct SweepHit {
+    float fraction=1;
+    XMFLOAT3 position{},normal{},correction{};
+    uint32_t triangle=0;
+    bool penetrating=false;
+};
+struct CollisionMove { XMFLOAT3 position{};std::vector<XMFLOAT3> normals;bool constrained=false; };
 class CollisionScene {
     struct Node { XMFLOAT3 minimum{},maximum{};uint32_t first=0,count=0,left=0,right=0; };
     std::vector<Triangle> triangles;
@@ -14,6 +21,8 @@ class CollisionScene {
 public:
     explicit CollisionScene(std::vector<Triangle> source);
     std::optional<RayHit> ray(XMFLOAT3 origin,XMFLOAT3 direction,float maximumDistance) const;
+    std::optional<SweepHit> sweepEllipsoid(XMFLOAT3 origin,XMFLOAT3 radii,XMFLOAT3 displacement) const;
+    CollisionMove moveEllipsoid(XMFLOAT3 origin,XMFLOAT3 radii,XMFLOAT3 displacement) const;
     size_t triangleCount() const { return triangles.size(); }
 };
 struct CourseCollision { uint32_t id=0;CollisionScene scene; };

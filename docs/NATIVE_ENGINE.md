@@ -8,12 +8,13 @@ The rewrite replaces the recompiled engine with ordinary PC data structures and 
 
 - A separate CMake build route returns before configuring the AOT toolchain or its dependencies.
 - Native little-endian asset bundle with bounded counts, native indices, transforms and strings.
-- Native skeleton hierarchy, inverse-bind transforms, quaternion interpolation, looping and CPU skinning.
+- Native skeleton hierarchy, inverse-bind transforms, quaternion interpolation, looping, one-shot sampling, local pose blending and CPU skinning. Authored root-motion curves retain their nonuniform key times and accumulate correctly across animation loops.
 - Direct3D 11 device/resources, project-authored shaders and WIC image loading.
 - Direct Windows keyboard/controller input and a fixed-step native movement/jump diagnostic arena.
 - Original 15-course catalog and chunk references converted from the player's package.
 - Native static mesh and material resources, texture decoding, alpha blending and authored resource transforms. Course chunks join through their start/end links; all 15 layouts are converted, with 9,647 static instances across the course set.
-- Native triangle queries with an engine-built spatial tree, using 25,390 converted static platform triangles across the 15 courses. Downward rays locate all 15 authored starting platforms. This is collision-query groundwork; original character/obstacle collision responses remain pending.
+- Native triangle queries with an engine-built spatial tree, using 25,390 converted static platform triangles across the 15 courses. Downward rays locate all 15 authored starting platforms. Continuous ellipsoid sweeps handle triangle faces, edges and vertices, initial overlaps and sliding. Analytic tests cover thin-floor tunneling and wall/floor tangential movement. The course player and dynamic obstacles do not use these responses yet.
+- Locally converted movement settings and eight movement/landing clips, including slow/fast authored motion. The native ground-run component applies inertia, no-input drag, playback speed and slow/fast motion blending. This component is checked independently; original action transitions and full player movement are still being implemented and compared with the working port.
 - Structural readers parse all 183 scene files, 56 resource templates, 106 animation files, 153 static mesh files and 36 collision mesh files in the supported original package. Scene scripts are retained as data, not executed by this preview.
 
 The first isolated live run rendered textured CJ in idle, jump and post-run poses, with 1,321 native simulation ticks, 661 GPU frames, movement and a measured jump arc. The rest-pose skinning error was approximately `1.23e-7` model units. This validates the animation arena and asset catalog; it does not establish original course gameplay, matching original physics or a performance comparison.

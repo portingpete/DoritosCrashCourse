@@ -13,6 +13,7 @@ from character_packs import ROOT, resolve_pack, original_inputs, digest
 from engine_assets import AssetError, read_animation, read_scene
 from inspect_pak import read_directory, read_entry, _no_links
 from engine_world import prepare_world
+from engine_gameplay import movement_data
 
 
 def prepare(pak: Path, output: Path, character='cj'):
@@ -39,15 +40,17 @@ def prepare(pak: Path, output: Path, character='cj'):
             ordered.append({'name': name, 'file': path, 'actors': len(scenes[path])})
         catalog.append({'id': level.values['LevelId'][0], 'name': level.name,
                         'theme': level.values['Theme'][0], 'chunks': ordered})
-    clips = {}
-    for key, filename in [('idle', 'idle_01.caf'), ('run', 'jog_01.caf'), ('jump', 'jump_02.caf')]:
-        clips[key] = read_animation(source('data/art/_avatar/' + filename), len(skeleton.bones))
+    movement_settings, movement_clips, movement_binary = movement_data(scenes)
+    clips = {key: read_animation(source('data/art/_avatar/' + filename.lower() + '.caf'), len(skeleton.bones))
+             for key, filename in movement_clips.items()}
     output.mkdir(parents=True, exist_ok=True)
+    _no_links(output / 'movement.dnp')
+    (output / 'movement.dnp').write_bytes(movement_binary)
     for index, image in enumerate(pack.textures):
         target = output / f'diffuse-{index}.png'
         _no_links(target)
         target.write_bytes(image)
-    binary = bytearray(b'DNE1' + struct.pack('<III', 1, len(skeleton.bones), len(pack.mesh.submeshes)))
+    binary = bytearray(b'DNE1' + struct.pack('<III', 2, len(skeleton.bones), len(pack.mesh.submeshes)))
     def string(value):
         encoded = value.encode('utf-8')
         binary.extend(struct.pack('<I', len(encoded)) + encoded)
@@ -70,6 +73,8 @@ def prepare(pak: Path, output: Path, character='cj'):
         for track in clip['tracks']:
             binary.extend(struct.pack('<II', track['bone'], len(track['keys'])))
             for key in track['keys']: binary.extend(struct.pack('<8f', *key))
+        binary.extend(struct.pack('<I',len(clip['motion'])))
+        for key in clip['motion']:binary.extend(struct.pack('<4f',*key))
     binary.extend(struct.pack('<I', len(catalog)))
     for level in catalog:
         binary.extend(struct.pack('<III', level['id'], level['theme'], len(level['chunks'])))
@@ -85,7 +90,10 @@ def prepare(pak: Path, output: Path, character='cj'):
                 'source_package_sha256': hashlib.sha256(pak.read_bytes()).hexdigest(),
                 'pack_sha256': pack.fingerprint, 'asset_sha256': digest(binary),
                 'bones': len(skeleton.bones), 'scenes_parsed': len(scenes), 'courses': catalog,
-                'animations': {name: {'duration': c['duration'], 'tracks': len(c['tracks'])} for name,c in clips.items()},
+                'animations': {name: {'source': movement_clips[name], 'duration': c['duration'], 'tracks': len(c['tracks']),
+                                      'motion_keys': len(c['motion'])} for name,c in clips.items()},
+                'movement_settings': movement_settings,
+                'movement_sha256': digest(movement_binary),
                 'runtime_uses_xex': False, 'runtime_uses_guest_memory': False,
                 'world': world,
                 'scope': 'Native character animation and static course inspection; original collision, dynamic actors and full gameplay not yet rewritten'}

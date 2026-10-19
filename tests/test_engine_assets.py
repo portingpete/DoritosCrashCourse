@@ -6,6 +6,8 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
 from engine_assets import AssetError,read_animation,read_scene,read_static_mesh,read_collision_mesh
 from engine_world import transform,matrix_product
+from engine_gameplay import movement_data,MOVEMENT_FIELDS,ANIMATION_FIELDS
+from engine_assets import SceneRecord
 
 
 def string(text):
@@ -19,7 +21,7 @@ def scene():
 
 
 def animation(flags=0):
-    extension=struct.pack('<I4f',1,0,1,2,3) if flags==2 else b''
+    extension=struct.pack('<I8f',2,0,1,2,3,1,1,4,3) if flags==2 else b''
     return (b'CAF\0'+struct.pack('<2I',1010,flags)+extension+struct.pack('<fIII',1,1,0,2)+
             struct.pack('<8f',0,0,0,0,0,0,0,1)+struct.pack('<8f',1,1,0,0,0,0,0,1))
 
@@ -38,6 +40,21 @@ def collision_mesh():
 
 
 class EngineAssetsTests(unittest.TestCase):
+    def test_movement_template_order_and_bounded_export(self):
+        game={k:[1.] for k in MOVEMENT_FIELDS};game['Gravity']=[-20.]
+        animation={k:[1.] for k in ANIMATION_FIELDS};animation['AnimSpeedChangePortion']=[.4]
+        animation.update({k:[v] for k,v in {'Idle':'IDLE','Sprint':'BOOST','Jump':'JUMP',
+                         'FallIdle':'FALL','EasyLanding':'LAND','HardLanding':'HARD'}.items()})
+        animation['MovementAnim']=['FAST','SLOW']
+        scenes={'data/templates/gameconfig.wbr':[SceneRecord('GAMECONFIGMASTER','default',game)],
+                'data/templates/animation.wbr':[SceneRecord('ANIMATIONMASTER','default',animation)]}
+        settings,clips,binary=movement_data(scenes)
+        self.assertEqual((clips['run'],clips['run_fast']),('SLOW','FAST'))
+        self.assertEqual(binary[:12],b'DNP1'+struct.pack('<II',1,17))
+        self.assertEqual(struct.unpack('<17f',binary[12:])[8],-20.)
+        for invalid in (float('nan'),0,-1):
+            game['RunInertiaTime']=[invalid]
+            with self.assertRaises(AssetError):movement_data(scenes)
     def test_collision_triangle_tree_and_truncation(self):
         data=collision_mesh();mesh=read_collision_mesh(data)
         self.assertEqual(mesh['indices'],[0,1,2]);self.assertEqual(len(mesh['nodes']),1)
@@ -89,7 +106,10 @@ class EngineAssetsTests(unittest.TestCase):
             clip=read_animation(animation(flags),1)
             self.assertEqual(clip['duration'],1)
             self.assertEqual(clip['tracks'][0]['keys'][-1],[1,1,0,0,0,0,0,1])
-            self.assertEqual(clip['motion'],[[0,1,2,3]] if flags else [])
+            self.assertEqual(clip['motion'],[[0,1,2,3],[1,1,4,3]] if flags else [])
+        for time in (-1,0,.5):
+            bad=bytearray(animation(2));struct.pack_into('<f',bad,32,time)
+            with self.assertRaises(AssetError):read_animation(bytes(bad),1)
 
     def test_animation_bones_times_quaternions_and_truncation_rejected(self):
         data=animation()

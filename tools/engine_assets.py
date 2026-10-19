@@ -260,6 +260,9 @@ def read_animation(data: bytes, bone_count: int) -> dict:
     duration = reader.floats(1)[0]
     if not 0 < duration <= 3600:
         raise AssetError('Invalid animation duration')
+    if motion and (motion[0][0]!=0 or abs(motion[-1][0]-duration)>.001 or
+                   any(a[0]<0 or b[0]<=a[0] for a,b in zip(motion,motion[1:]))):
+        raise AssetError('Root-motion keys must increase and span the clip')
     tracks, seen = [], set()
     for _ in range(reader.count(bone_count)):
         bone = reader.u32()

@@ -7,10 +7,39 @@
 namespace Doritos::Engine {
 namespace {
 XMFLOAT3 sub(XMFLOAT3 a,XMFLOAT3 b) { return {a.x-b.x,a.y-b.y,a.z-b.z}; }
+XMFLOAT3 add(XMFLOAT3 a,XMFLOAT3 b) { return {a.x+b.x,a.y+b.y,a.z+b.z}; }
+XMFLOAT3 scale(XMFLOAT3 a,float s) { return {a.x*s,a.y*s,a.z*s}; }
+XMFLOAT3 multiply(XMFLOAT3 a,XMFLOAT3 b) { return {a.x*b.x,a.y*b.y,a.z*b.z}; }
+XMFLOAT3 divide(XMFLOAT3 a,XMFLOAT3 b) { return {a.x/b.x,a.y/b.y,a.z/b.z}; }
 float dot(XMFLOAT3 a,XMFLOAT3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
 XMFLOAT3 cross(XMFLOAT3 a,XMFLOAT3 b) { return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x}; }
 bool finite(XMFLOAT3 a) { return std::isfinite(a.x)&&std::isfinite(a.y)&&std::isfinite(a.z); }
 float component(XMFLOAT3 a,int axis) { return axis==0?a.x:axis==1?a.y:a.z; }
+XMFLOAT3 unit(XMFLOAT3 a) { float n=std::sqrt(dot(a,a));return n>1e-12f?scale(a,1/n):XMFLOAT3{}; }
+XMFLOAT3 closestSegment(XMFLOAT3 point,XMFLOAT3 a,XMFLOAT3 b) {
+    auto ab=sub(b,a);float length=dot(ab,ab);return length>1e-16f?add(a,scale(ab,std::clamp(dot(sub(point,a),ab)/length,0.f,1.f))):a;
+}
+XMFLOAT3 closestTriangle(XMFLOAT3 p,const Triangle& t) {
+    auto ab=sub(t.b,t.a),ac=sub(t.c,t.a),ap=sub(p,t.a);
+    if(dot(cross(ab,ac),cross(ab,ac))<1e-16f) {
+        auto a=closestSegment(p,t.a,t.b),b=closestSegment(p,t.b,t.c),c=closestSegment(p,t.c,t.a);
+        if(dot(sub(p,b),sub(p,b))<dot(sub(p,a),sub(p,a)))a=b;
+        return dot(sub(p,c),sub(p,c))<dot(sub(p,a),sub(p,a))?c:a;
+    }
+    float d1=dot(ab,ap),d2=dot(ac,ap);if(d1<=0&&d2<=0)return t.a;
+    auto bp=sub(p,t.b);float d3=dot(ab,bp),d4=dot(ac,bp);if(d3>=0&&d4<=d3)return t.b;
+    float vc=d1*d4-d3*d2;if(vc<=0&&d1>=0&&d3<=0)return add(t.a,scale(ab,d1/(d1-d3)));
+    auto cp=sub(p,t.c);float d5=dot(ab,cp),d6=dot(ac,cp);if(d6>=0&&d5<=d6)return t.c;
+    float vb=d5*d2-d1*d6;if(vb<=0&&d2>=0&&d6<=0)return add(t.a,scale(ac,d2/(d2-d6)));
+    float va=d3*d6-d5*d4;if(va<=0&&(d4-d3)>=0&&(d5-d6)>=0)return add(t.b,scale(sub(t.c,t.b),(d4-d3)/((d4-d3)+(d5-d6))));
+    float inverse=1/(va+vb+vc);return add(t.a,add(scale(ab,vb*inverse),scale(ac,vc*inverse)));
+}
+std::optional<float> quadraticFirst(float a,float b,float c,float maximum) {
+    if(a<1e-16f)return std::nullopt;
+    double discriminant=double(b)*b-4*double(a)*c;if(discriminant<0)return std::nullopt;
+    double t=(-double(b)-std::sqrt(discriminant))/(2*double(a));
+    if(t<0||t>maximum)return std::nullopt;return float(t);
+}
 }
 CollisionScene::CollisionScene(std::vector<Triangle> source):triangles(std::move(source)) {
     need(triangles.size()<=1000000,"Native collision geometry exceeds budget");
@@ -64,6 +93,76 @@ std::optional<RayHit> CollisionScene::ray(XMFLOAT3 origin,XMFLOAT3 direction,flo
             normal={normal.x/size*sign,normal.y/size*sign,normal.z/size*sign};closest=distance;
             result=RayHit{distance,{origin.x+direction.x*distance,origin.y+direction.y*distance,origin.z+direction.z*distance},normal,order[i]};
         }
+    }
+    return result;
+}
+std::optional<SweepHit> CollisionScene::sweepEllipsoid(XMFLOAT3 origin,XMFLOAT3 radii,XMFLOAT3 displacement) const {
+    need(finite(origin)&&finite(radii)&&finite(displacement)&&radii.x>1e-5f&&radii.y>1e-5f&&radii.z>1e-5f,
+         "Invalid native ellipsoid sweep");
+    auto end=add(origin,displacement);
+    need(finite(end),"Native ellipsoid sweep endpoint overflow");
+    XMFLOAT3 minimum{std::min(origin.x,end.x)-radii.x,std::min(origin.y,end.y)-radii.y,std::min(origin.z,end.z)-radii.z};
+    XMFLOAT3 maximum{std::max(origin.x,end.x)+radii.x,std::max(origin.y,end.y)+radii.y,std::max(origin.z,end.z)+radii.z};
+    auto velocity=divide(displacement,radii);std::optional<SweepHit> result;float first=1,deepest=0;
+    std::vector<uint32_t> stack;if(!nodes.empty())stack.push_back(0);
+    auto contact=[&](float time,XMFLOAT3 normal,uint32_t index) {
+        if(time<0||time>first||dot(velocity,normal)>=-1e-7f||deepest>0)return;
+        first=time;result=SweepHit{time,add(origin,scale(displacement,time)),unit(divide(normal,radii)),{},index,false};
+    };
+    while(!stack.empty()) {
+        auto n=nodes[stack.back()];stack.pop_back();
+        if(n.maximum.x<minimum.x||n.minimum.x>maximum.x||n.maximum.y<minimum.y||n.minimum.y>maximum.y||n.maximum.z<minimum.z||n.minimum.z>maximum.z)continue;
+        if(!n.count) { stack.push_back(n.left);stack.push_back(n.right);continue; }
+        for(uint32_t i=n.first;i<n.first+n.count;++i) {
+            uint32_t index=order[i];auto& source=triangles[index];
+            Triangle t{divide(sub(source.a,origin),radii),divide(sub(source.b,origin),radii),divide(sub(source.c,origin),radii)};
+            auto closest=closestTriangle({},t);float distance=std::sqrt(dot(closest,closest));
+            auto face=unit(cross(sub(t.b,t.a),sub(t.c,t.a)));
+            if(distance<1-1e-5f) {
+                float depth=1-distance;
+                if(depth>deepest) {
+                    auto normal=distance>1e-6f?scale(closest,-1/distance):face;
+                    if(distance<=1e-6f&&dot(normal,velocity)>0)normal=scale(normal,-1);
+                    deepest=depth;auto correction=multiply(scale(normal,depth+1e-4f),radii);
+                    result=SweepHit{0,origin,unit(divide(normal,radii)),correction,index,true};
+                }
+                continue;
+            }
+            if(deepest>0)continue;
+            float denominator=dot(face,velocity),plane=dot(face,t.a);
+            if(std::abs(denominator)>1e-8f)for(float side:{-1.f,1.f}) {
+                float time=(plane+side)/denominator;if(time<0||time>first)continue;
+                auto normal=scale(face,side),point=sub(scale(velocity,time),normal),projected=closestTriangle(point,t);
+                if(dot(sub(point,projected),sub(point,projected))<1e-8f)contact(time,normal,index);
+            }
+            for(auto vertex:{t.a,t.b,t.c}) {
+                auto time=quadraticFirst(dot(velocity,velocity),-2*dot(velocity,vertex),dot(vertex,vertex)-1,first);
+                if(time)contact(*time,unit(sub(scale(velocity,*time),vertex)),index);
+            }
+            for(auto edge:std::array<std::pair<XMFLOAT3,XMFLOAT3>,3>{{{t.a,t.b},{t.b,t.c},{t.c,t.a}}}) {
+                auto e=sub(edge.second,edge.first);float length=dot(e,e);if(length<1e-16f)continue;
+                auto w=scale(edge.first,-1),a=sub(velocity,scale(e,dot(velocity,e)/length)),b=sub(w,scale(e,dot(w,e)/length));
+                auto time=quadraticFirst(dot(a,a),2*dot(a,b),dot(b,b)-1,first);if(!time)continue;
+                float along=(dot(w,e)+dot(velocity,e)* *time)/length;if(along<0||along>1)continue;
+                auto point=add(edge.first,scale(e,along));contact(*time,unit(sub(scale(velocity,*time),point)),index);
+            }
+        }
+    }
+    return result;
+}
+CollisionMove CollisionScene::moveEllipsoid(XMFLOAT3 origin,XMFLOAT3 radii,XMFLOAT3 displacement) const {
+    CollisionMove result;result.position=origin;auto remaining=displacement;
+    for(int iteration=0;iteration<12;++iteration) {
+        auto hit=sweepEllipsoid(result.position,radii,remaining);
+        if(!hit) { result.position=add(result.position,remaining);break; }
+        result.constrained=true;result.normals.push_back(hit->normal);
+        if(hit->penetrating)result.position=add(result.position,hit->correction);
+        else {
+            float length=std::sqrt(dot(remaining,remaining));float fraction=std::max(0.f,hit->fraction-(length>0?1e-4f/length:0));
+            result.position=add(result.position,scale(remaining,fraction));remaining=scale(remaining,1-fraction);
+        }
+        for(auto normal:result.normals) { float into=dot(remaining,normal);if(into<0)remaining=sub(remaining,scale(normal,into)); }
+        if(dot(remaining,remaining)<1e-12f&&!hit->penetrating)break;
     }
     return result;
 }

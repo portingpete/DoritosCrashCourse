@@ -1,4 +1,4 @@
-add_library(DoritosEngineCore STATIC model.cpp world.cpp collision.cpp)
+add_library(DoritosEngineCore STATIC model.cpp world.cpp collision.cpp locomotion.cpp)
 target_include_directories(DoritosEngineCore PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_definitions(DoritosEngineCore PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 add_executable(DoritosNativeEngine main.cpp)

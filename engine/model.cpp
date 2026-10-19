@@ -33,7 +33,8 @@ Transform sample(const Track& track, float time) {
 
 Model loadModel(const std::filesystem::path& path) {
     AssetReader input(path); Model model;
-    need(input.read<uint32_t>() == 0x31454e44 && input.read<uint32_t>() == 1, "Unsupported independent native asset");
+    need(input.read<uint32_t>() == 0x31454e44, "Unsupported independent native asset");
+    auto version=input.read<uint32_t>();need(version==1||version==2,"Unsupported native character version");
     auto boneCount = input.count(256), meshCount = input.count(4);
     need(boneCount && meshCount, "Native character has no bones or meshes");
     model.name = input.string();
@@ -75,6 +76,15 @@ Model loadModel(const std::filesystem::path& path) {
             }
             clip.tracks.push_back(std::move(track));
         }
+        if(version>=2) {
+            auto count=input.count(100000);
+            for(uint32_t j=0;j<count;++j) {
+                MotionKey key;key.time=input.number();key.position=input.vector();
+                need(key.time>=0&&key.time<=clip.duration+.001f&&(clip.motion.empty()||key.time>clip.motion.back().time),"Invalid native root-motion times");
+                clip.motion.push_back(key);
+            }
+            need(clip.motion.empty()||(clip.motion.front().time==0&&std::abs(clip.motion.back().time-clip.duration)<.001f),"Native root motion must cover the clip");
+        }
         model.clips.push_back(std::move(clip));
     }
     auto courses=input.count(15); std::array<bool,15> used{};
@@ -88,14 +98,18 @@ Model loadModel(const std::filesystem::path& path) {
     input.end(); (void)samplePose(model,nullptr,0); return model;
 }
 
-std::vector<XMFLOAT4X4> samplePose(const Model& model, const Clip* clip, float seconds) {
+namespace {
+std::vector<Transform> localPose(const Model& model,const Clip* clip,float seconds,bool loop) {
     need(std::isfinite(seconds),"Nonfinite animation clock");
     std::vector<Transform> locals; for (const auto& bone:model.bones) locals.push_back(bone.rest);
     if (clip) {
         need(clip->duration>0,"Invalid animation duration");
-        float time=std::fmod(std::max(seconds,0.f),clip->duration);
+        float time=loop?std::fmod(std::max(seconds,0.f),clip->duration):std::clamp(seconds,0.f,clip->duration);
         for (const auto& track:clip->tracks) { need(track.bone<locals.size(),"Invalid sampled bone"); locals[track.bone]=sample(track,time); }
     }
+    return locals;
+}
+std::vector<XMFLOAT4X4> composePose(const Model& model,const std::vector<Transform>& locals) {
     std::vector<XMFLOAT4X4> absolute(model.bones.size()), result(model.bones.size());
     std::vector<uint8_t> visited(model.bones.size());
     std::function<void(size_t)> visit=[&](size_t index) {
@@ -107,6 +121,37 @@ std::vector<XMFLOAT4X4> samplePose(const Model& model, const Clip* clip, float s
         visited[index]=2;
     };
     for(size_t i=0;i<model.bones.size();++i)visit(i); return result;
+}
+XMFLOAT3 motionPosition(const Clip& clip,float time) {
+    auto right=std::upper_bound(clip.motion.begin(),clip.motion.end(),time,[](float t,const MotionKey& k){return t<k.time;});
+    if(right==clip.motion.begin())return right->position;
+    if(right==clip.motion.end())return clip.motion.back().position;
+    auto& a=*(right-1);auto& b=*right;XMFLOAT3 value;
+    XMStoreFloat3(&value,XMVectorLerp(XMLoadFloat3(&a.position),XMLoadFloat3(&b.position),(time-a.time)/(b.time-a.time)));return value;
+}
+}
+std::vector<XMFLOAT4X4> samplePose(const Model& model,const Clip* clip,float seconds,bool loop) {
+    return composePose(model,localPose(model,clip,seconds,loop));
+}
+std::vector<XMFLOAT4X4> blendPose(const Model& model,const Clip* first,float firstTime,const Clip* second,float secondTime,float weight,bool loop) {
+    need(std::isfinite(weight)&&weight>=0&&weight<=1,"Native pose blend outside range");
+    auto a=localPose(model,first,firstTime,loop),b=localPose(model,second,secondTime,loop);
+    for(size_t i=0;i<a.size();++i) {
+        XMStoreFloat3(&a[i].position,XMVectorLerp(XMLoadFloat3(&a[i].position),XMLoadFloat3(&b[i].position),weight));
+        XMStoreFloat4(&a[i].rotation,XMQuaternionSlerp(XMLoadFloat4(&a[i].rotation),XMLoadFloat4(&b[i].rotation),weight));
+    }
+    return composePose(model,a);
+}
+XMFLOAT3 rootMotionDelta(const Clip& clip,double firstTime,double secondTime,bool loop) {
+    need(std::isfinite(firstTime)&&std::isfinite(secondTime)&&std::abs(firstTime)<=1e9&&std::abs(secondTime)<=1e9&&std::isfinite(clip.duration)&&clip.duration>0,"Invalid native root-motion interval");
+    if(clip.motion.empty())return {};
+    auto position=[&](double time) {
+        double cycles=loop?std::floor(time/clip.duration):0;
+        float phase=loop?float(time-cycles*clip.duration):float(std::clamp(time,0.,double(clip.duration)));
+        auto p=motionPosition(clip,phase),start=clip.motion.front().position,end=clip.motion.back().position;
+        return std::array<double,3>{p.x-start.x+cycles*(end.x-start.x),p.y-start.y+cycles*(end.y-start.y),p.z-start.z+cycles*(end.z-start.z)};
+    };
+    auto a=position(firstTime),b=position(secondTime);return {float(b[0]-a[0]),float(b[1]-a[1]),float(b[2]-a[2])};
 }
 
 std::vector<DrawVertex> skin(const Mesh& mesh,const std::vector<XMFLOAT4X4>& pose) {

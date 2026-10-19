@@ -1,6 +1,7 @@
 #include "model.h"
 #include "world.h"
 #include "collision.h"
+#include "locomotion.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -286,6 +287,16 @@ int wmain(int argc,wchar_t** argv) {
             float worst=0; auto pose=samplePose(model,nullptr,0);
             for(auto& mesh:model.meshes) { auto vertices=skin(mesh,pose); for(size_t i=0;i<vertices.size();++i) { auto a=XMLoadFloat3(&vertices[i].position),b=XMLoadFloat3(&mesh.vertices[i].position); worst=std::max(worst,XMVectorGetX(XMVector3Length(XMVectorSubtract(a,b)))); } }
             if(worst>.002f || model.courses.size()!=15)throw std::runtime_error("Native rest pose/course check failed");
+            if(std::filesystem::exists(option.assets/L"movement.dnp")) {
+                localPath(option.assets/L"movement.dnp");auto settings=loadMovementSettings(option.assets/L"movement.dnp");
+                const Clip *slow=nullptr,*fast=nullptr;
+                for(auto& clip:model.clips) { if(clip.name=="run")slow=&clip;if(clip.name=="run_fast")fast=&clip; }
+                if(!slow||!fast)throw std::runtime_error("Native movement settings require slow and fast clips");
+                GroundRun run;float distance=0;
+                for(int i=0;i<240;++i)distance+=run.advance(*slow,*fast,settings,i<180?1.f:0.f,1.f/120).distance;
+                if(!std::isfinite(distance)||distance<=0||run.amount()!=0)throw std::runtime_error("Native authored locomotion check failed");
+                std::cout<<"[NATIVE LOCOMOTION CHECK] motion_distance="<<distance<<" stopped=1 authored_settings=1\n";
+            }
             if(option.coursePreview) {
                 localPath(option.assets/L"world.dnw");auto world=loadWorld(option.assets/L"world.dnw");
                 size_t count=0;for(auto& c:world.courses)count+=c.instances.size();

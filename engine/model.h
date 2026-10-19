@@ -23,7 +23,8 @@ struct DrawVertex { XMFLOAT3 position{}, normal{}; XMFLOAT2 uv{}; };
 struct Mesh { uint32_t texture = 0; std::vector<Vertex> vertices; std::vector<uint32_t> indices; };
 struct Key { float time = 0; Transform transform; };
 struct Track { uint32_t bone = 0; std::vector<Key> keys; };
-struct Clip { std::string name; float duration = 0; std::vector<Track> tracks; };
+struct MotionKey { float time=0; XMFLOAT3 position{}; };
+struct Clip { std::string name; float duration = 0; std::vector<Track> tracks; std::vector<MotionKey> motion; };
 struct Chunk { std::string name; uint32_t actors = 0; };
 struct Course { uint32_t id = 0, theme = 0; std::string name; std::vector<Chunk> chunks; };
 struct Model {
@@ -34,7 +35,9 @@ struct Model {
     std::vector<Course> courses;
 };
 Model loadModel(const std::filesystem::path& path);
-std::vector<XMFLOAT4X4> samplePose(const Model& model, const Clip* clip, float seconds);
+std::vector<XMFLOAT4X4> samplePose(const Model& model, const Clip* clip, float seconds, bool loop=true);
+std::vector<XMFLOAT4X4> blendPose(const Model& model,const Clip* first,float firstTime,const Clip* second,float secondTime,float weight,bool loop=true);
+XMFLOAT3 rootMotionDelta(const Clip& clip,double firstTime,double secondTime,bool loop=true);
 std::vector<DrawVertex> skin(const Mesh& mesh, const std::vector<XMFLOAT4X4>& pose);
 struct Input { float horizontal = 0; bool jump = false; };
 struct Player {
