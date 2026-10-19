@@ -39,8 +39,9 @@ def movement_data(scenes):
             or not 0 < settings['MinAnimSpeed'] <= 1
             or settings['BoostMaxAnimSpeed'] < 1
             or settings['BoostRange'] <= 0
+            or settings['JumpGravityFactor'] >= 0 or not 0 <= settings['JumpAnimTimeFactor'] < 1
             or any(settings[k] < 0 for k in ('RunDragFactorNoInput', 'RunDragFactorBoost',
-                                            'MovementEaseInTime', 'MovementEaseOutTime'))):
+                                            'MovementEaseInTime', 'MovementEaseOutTime', *PLAYER_FIELDS))):
         raise AssetError('Movement settings outside supported ranges')
     # Scene arrays are serialized in reverse semantic order.
     movement = list(reversed(animation['MovementAnim']))

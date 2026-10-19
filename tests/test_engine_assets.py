@@ -42,6 +42,7 @@ def collision_mesh():
 class EngineAssetsTests(unittest.TestCase):
     def test_movement_template_order_and_bounded_export(self):
         game={k:[1.] for k in MOVEMENT_FIELDS+PLAYER_FIELDS};game['Gravity']=[-20.]
+        game['JumpGravityFactor']=[-.5];game['JumpAnimTimeFactor']=[.7]
         for k in CURVE_FIELDS:game[k]=[[0,1]]
         animation={k:[1.] for k in ANIMATION_FIELDS};animation['AnimSpeedChangePortion']=[.4]
         animation.update({k:[v] for k,v in {'Idle':'IDLE','Sprint':'BOOST','Jump':'JUMP',
