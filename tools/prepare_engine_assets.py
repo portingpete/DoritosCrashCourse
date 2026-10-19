@@ -96,7 +96,7 @@ def prepare(pak: Path, output: Path, character='cj'):
                 'movement_sha256': digest(movement_binary),
                 'runtime_uses_xex': False, 'runtime_uses_guest_memory': False,
                 'world': world,
-                'scope': 'Native character animation and static course inspection; original collision, dynamic actors and full gameplay not yet rewritten'}
+                'scope': 'Native character animation, static geometry and basic course movement; remaining actions, dynamic actors and full gameplay pending'}
     for name in ('manifest.json', 'source-scenes.json'):
         _no_links(output / name)
     (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')

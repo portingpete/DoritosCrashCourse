@@ -4,7 +4,7 @@ A Windows x64 port of **Doritos Crash Course**, with native keyboard, mouse and 
 
 [Build guide](docs/BUILDING.md) · [Character importer](docs/CHARACTERS.md) · [Credits](docs/CREDITS.md)
 
-An [independent native engine rewrite](docs/NATIVE_ENGINE.md) is being developed alongside the working recompiled port. Its separate Direct3D 11 previews support native CJ animation, a diagnostic movement/jump arena and static inspection of the original 15 course layouts. Original collision, dynamic obstacles, complete graphics effects, audio and game flow are still being rewritten. `Launch.cmd` continues to run the working port.
+An [independent native engine rewrite](docs/NATIVE_ENGINE.md) is being developed alongside the working recompiled port. Its separate Direct3D 11 previews support CJ animation, static inspection of the original 15 course layouts, and basic course movement with static collision. Dynamic obstacles, complete graphics effects, remaining movement actions, audio and game flow are still being rewritten. `Launch.cmd` continues to run the working port.
 
 ![CJ, the default character](assets/characters/cj/preview.png)
 

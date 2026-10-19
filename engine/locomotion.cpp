@@ -5,21 +5,36 @@
 namespace Doritos::Engine {
 MovementSettings loadMovementSettings(const std::filesystem::path& path) {
     AssetReader input(path);
-    need(input.read<uint32_t>()==0x31504e44&&input.read<uint32_t>()==1&&input.read<uint32_t>()==17,
-         "Unsupported native movement settings");
+    need(input.read<uint32_t>()==0x31504e44,"Unsupported native movement settings");
+    auto version=input.read<uint32_t>(),count=input.read<uint32_t>();
+    need((version==1&&count==17)||(version==2&&count==34),"Unsupported native movement settings version");
     MovementSettings s;
     s.inertiaTime=input.number();s.dragNoInput=input.number();s.dragOverRun=input.number();
     s.slope=input.number();s.slopeNoInput=input.number();s.slopeBoost=input.number();
     s.boostRange=input.number();s.boostFactor=input.number();s.gravity=input.number();
     s.airFriction=input.number();s.jumpGravityFactor=input.number();s.jumpTimeFactor=input.number();
     s.speedChange=input.number();s.minimumSpeed=input.number();s.maximumBoostSpeed=input.number();
-    s.easeIn=input.number();s.easeOut=input.number();input.end();
+    s.easeIn=input.number();s.easeOut=input.number();
+    if(version>=2) {
+        s.jumpQueue=input.number();s.landRunFactor=input.number();s.landResumeTime=input.number();
+        s.jumpFactors={input.number(),input.number()};s.jumpSpeeds={input.number(),input.number()};
+        s.airFactors={input.number(),input.number()};s.airSpeeds={input.number(),input.number()};
+        s.feetOffset=input.vector();s.feetRadii=input.vector();s.courseParameters=true;
+        need(s.jumpQueue>=0&&s.landRunFactor>=0&&s.landResumeTime>=0&&s.jumpSpeeds.x>=0&&s.jumpSpeeds.y>s.jumpSpeeds.x
+             &&s.airSpeeds.x>=0&&s.airSpeeds.y>s.airSpeeds.x&&s.feetRadii.x>0&&s.feetRadii.y>0&&s.feetRadii.z>0
+             &&s.jumpTimeFactor>=0&&s.jumpTimeFactor<1&&s.jumpGravityFactor<0,"Invalid native player settings");
+    }
+    input.end();
     need(s.inertiaTime>0&&s.dragNoInput>=0&&s.dragOverRun>=0&&s.boostRange>0&&s.gravity<0&&s.airFriction>=0
          &&s.speedChange>0&&s.speedChange<1&&s.minimumSpeed>0&&s.minimumSpeed<=1
          &&s.maximumBoostSpeed>=1&&s.easeIn>=0&&s.easeOut>=0,"Invalid native movement settings");
     return s;
 }
 void GroundRun::reset() { phase=0;inertia=0;active=false; }
+void GroundRun::resume(float amount) {
+    need(std::isfinite(amount)&&amount>=0,"Invalid native landing inertia");
+    phase=0;inertia=amount;active=amount>0;
+}
 RunSample GroundRun::advance(const Clip& slow,const Clip& fast,const MovementSettings& settings,
                             float input,float seconds,float forwardSlope) {
     need(std::isfinite(input)&&input>=0&&input<=1&&std::isfinite(seconds)&&seconds>0&&seconds<=.05f

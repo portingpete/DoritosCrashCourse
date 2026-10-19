@@ -7,6 +7,10 @@ struct MovementSettings {
     float slope=0, slopeNoInput=0, slopeBoost=0, boostRange=1, boostFactor=0;
     float gravity=-1, airFriction=0, jumpGravityFactor=-1, jumpTimeFactor=.5f;
     float speedChange=.5f, minimumSpeed=1, maximumBoostSpeed=1, easeIn=0, easeOut=0;
+    float jumpQueue=0, landRunFactor=0, landResumeTime=0;
+    XMFLOAT2 jumpFactors{}, jumpSpeeds{}, airFactors{}, airSpeeds{};
+    XMFLOAT3 feetOffset{}, feetRadii{};
+    bool courseParameters=false;
 };
 MovementSettings loadMovementSettings(const std::filesystem::path& path);
 struct RunSample {
@@ -22,6 +26,7 @@ class GroundRun {
     bool active=false;
 public:
     void reset();
+    void resume(float amount);
     float amount() const { return inertia; }
     RunSample advance(const Clip& slow,const Clip& fast,const MovementSettings& settings,
                       float inputMagnitude,float seconds,float forwardSlope=0);

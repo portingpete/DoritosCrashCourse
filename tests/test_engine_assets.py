@@ -6,7 +6,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
 from engine_assets import AssetError,read_animation,read_scene,read_static_mesh,read_collision_mesh
 from engine_world import transform,matrix_product
-from engine_gameplay import movement_data,MOVEMENT_FIELDS,ANIMATION_FIELDS
+from engine_gameplay import movement_data,MOVEMENT_FIELDS,ANIMATION_FIELDS,PLAYER_FIELDS,CURVE_FIELDS
 from engine_assets import SceneRecord
 
 
@@ -41,17 +41,23 @@ def collision_mesh():
 
 class EngineAssetsTests(unittest.TestCase):
     def test_movement_template_order_and_bounded_export(self):
-        game={k:[1.] for k in MOVEMENT_FIELDS};game['Gravity']=[-20.]
+        game={k:[1.] for k in MOVEMENT_FIELDS+PLAYER_FIELDS};game['Gravity']=[-20.]
+        for k in CURVE_FIELDS:game[k]=[[0,1]]
         animation={k:[1.] for k in ANIMATION_FIELDS};animation['AnimSpeedChangePortion']=[.4]
         animation.update({k:[v] for k,v in {'Idle':'IDLE','Sprint':'BOOST','Jump':'JUMP',
                          'FallIdle':'FALL','EasyLanding':'LAND','HardLanding':'HARD'}.items()})
         animation['MovementAnim']=['FAST','SLOW']
         scenes={'data/templates/gameconfig.wbr':[SceneRecord('GAMECONFIGMASTER','default',game)],
-                'data/templates/animation.wbr':[SceneRecord('ANIMATIONMASTER','default',animation)]}
+                'data/templates/animation.wbr':[SceneRecord('ANIMATIONMASTER','default',animation)],
+                'data/templates/fighter.wbr':[SceneRecord('FIGHTERMASTER','player/gamepad0',{
+                    'FeetCollider':['feet'],'FeetColliderBone':[''],'FeetColliderPos':[[0,2,0]],'FeetColliderScale':[[1,1,1]]})],
+                'data/templates/cprimitive3.wbr':[SceneRecord('CPRIMITIVE3MASTER','feet',{
+                    'PrimitiveType':[1],'BoundingBoxMin':[[-.5,-.5,-.5]],'BoundingBoxMax':[[.5,.5,.5]]})]}
         settings,clips,binary=movement_data(scenes)
         self.assertEqual((clips['run'],clips['run_fast']),('SLOW','FAST'))
-        self.assertEqual(binary[:12],b'DNP1'+struct.pack('<II',1,17))
-        self.assertEqual(struct.unpack('<17f',binary[12:])[8],-20.)
+        self.assertEqual(binary[:12],b'DNP1'+struct.pack('<II',2,34))
+        self.assertEqual(struct.unpack('<34f',binary[12:])[8],-20.)
+        self.assertEqual(settings['FeetOffset'],[0,0,2])
         for invalid in (float('nan'),0,-1):
             game['RunInertiaTime']=[invalid]
             with self.assertRaises(AssetError):movement_data(scenes)

@@ -12,4 +12,4 @@ Invoke-Checked $pythonExe @('tools/prepare_engine_assets.py','--character',$Char
 Invoke-Checked 'cmake' @('-S','.','-B','build_native/engine','-G','Visual Studio 17 2022','-A','x64','-T','ClangCL','-DDORITOS_ENGINE_ONLY=ON',"-DPython3_EXECUTABLE=$pythonExe")
 Invoke-Checked 'cmake' @('--build','build_native/engine','--config','Release','--parallel',"$Jobs")
 Invoke-Checked 'ctest' @('--test-dir','build_native/engine','-C','Release','--output-on-failure')
-Write-Host 'Independent native previews ready. Add --course-preview to inspect static courses. Full gameplay is still being rewritten.'
+Write-Host 'Independent native previews ready. Use --course-preview to inspect static courses, or --course-play for basic movement. Full gameplay is still being rewritten.'
