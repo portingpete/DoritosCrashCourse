@@ -28,7 +28,7 @@ def main():
             text=linkmap.read_text(encoding='utf-8',errors='replace')
             for token in FORBIDDEN:
                 if token.casefold() in text.casefold(): failures.append('Linker map contains '+token)
-            for token in ('enginecore','d3d11','doritoslua51'):
+            for token in ('enginecore','enginesession','d3d11','doritoslua51'):
                 if token not in text.casefold(): failures.append('Linker map missing expected native library '+token)
     result={'passed':not failures,'source_files':files,'linkmap':str(linkmap) if linkmap else None,'failures':failures}
     print(json.dumps(result,indent=2)); return 0 if result['passed'] else 1

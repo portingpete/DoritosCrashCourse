@@ -20,12 +20,14 @@ def matrix_product(a, b):
 
 
 def transform(position=(0,0,0), angles=(0,0,0), scale=(1,1,1)):
-    x,y,z = [math.radians(v) for v in angles]
+    # Scene ANG3 stores yaw about source Y, pitch about X, then roll about Z.
+    # Its quaternion composition becomes Rz(roll)*Rx(pitch)*Ry(yaw) here.
+    y,x,z = [math.radians(v) for v in angles]
     cx,sx,cy,sy,cz,sz = math.cos(x),math.sin(x),math.cos(y),math.sin(y),math.cos(z),math.sin(z)
     rx=[[1,0,0,0],[0,cx,-sx,0],[0,sx,cx,0],[0,0,0,1]]
     ry=[[cy,0,sy,0],[0,1,0,0],[-sy,0,cy,0],[0,0,0,1]]
     rz=[[cz,-sz,0,0],[sz,cz,0,0],[0,0,1,0],[0,0,0,1]]
-    result=matrix_product(rz,matrix_product(ry,rx))
+    result=matrix_product(rz,matrix_product(rx,ry))
     for i in range(3):
         for j in range(3): result[i][j]*=scale[j]
         result[i][3]=position[i]

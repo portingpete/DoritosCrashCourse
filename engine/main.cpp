@@ -4,6 +4,8 @@
 #include "locomotion.h"
 #include "player.h"
 #include "scripts.h"
+#include "environment.h"
+#include "session.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -101,6 +103,10 @@ struct GpuMesh {
     ComPtr<ID3D11ShaderResourceView> texture;
     uint32_t count=0;
 };
+struct GpuWorld {
+    std::vector<GpuMesh> meshes;
+    std::vector<ComPtr<ID3D11ShaderResourceView>> textures;
+};
 struct Renderer {
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> context;
@@ -115,8 +121,9 @@ struct Renderer {
     ComPtr<ID3D11RasterizerState> raster;
     ComPtr<ID3D11BlendState> blend;
     std::vector<GpuMesh> meshes;
-    std::vector<GpuMesh> worldMeshes;
-    std::vector<ComPtr<ID3D11ShaderResourceView>> worldTextures;
+    GpuWorld courseGeometry,environmentGeometry;
+    XMFLOAT4 ambient{.4f,.4f,.4f,0};
+    std::array<XMFLOAT4,4> lightDirections{},lightColors{};
     GpuMesh floor;
     uint64_t frames=0,draws=0;
     HFONT font=nullptr;
@@ -136,12 +143,12 @@ struct Renderer {
         ComPtr<ID3D11Texture2D> zbuffer; check(device->CreateTexture2D(&z,nullptr,&zbuffer),"Cannot create native depth buffer");
         check(device->CreateDepthStencilView(zbuffer.Get(),nullptr,&depth),"Cannot create native depth view");
         const char* shader=R"(
-cbuffer Camera : register(b0) { float4x4 worldViewProjection; float4x4 world; float4 tint; float4 properties; };
+cbuffer Camera : register(b0) { float4x4 worldViewProjection; float4x4 world; float4 tint; float4 properties; float4 ambient; float4 lightDirections[4]; float4 lightColors[4]; };
 struct Input { float3 position:POSITION; float3 normal:NORMAL; float2 uv:TEXCOORD0; };
 struct Output { float4 position:SV_POSITION; float3 normal:NORMAL; float2 uv:TEXCOORD0; };
 Output vertexMain(Input v) { Output o; o.position=mul(float4(v.position,1),worldViewProjection); o.normal=mul(float4(v.normal,0),world).xyz; o.uv=v.uv; return o; }
 Texture2D diffuse:register(t0); SamplerState linearSampler:register(s0);
-float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler,i.uv)*tint; clip(color.a-.02); float light=properties.x>.5 ? .4+.6*saturate(dot(normalize(i.normal),normalize(float3(-.4,-.6,1)))) : 1; return float4(color.rgb*light,color.a); }
+float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler,i.uv)*tint; clip(color.a-.02); float3 light=1; if(properties.x>.5) { light=ambient.rgb; float3 normal=normalize(i.normal); [unroll] for(int j=0;j<4;++j)light+=lightColors[j].rgb*saturate(dot(normal,lightDirections[j].xyz)); } return float4(color.rgb*light,color.a); }
 )";
         ComPtr<ID3DBlob> vs,ps,error;
         check(D3DCompile(shader,strlen(shader),"IndependentNativeShader",nullptr,nullptr,"vertexMain","vs_4_0",D3DCOMPILE_ENABLE_STRICTNESS,0,&vs,&error),"Cannot compile native vertex shader");
@@ -153,7 +160,7 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
             {"NORMAL",0,DXGI_FORMAT_R32G32B32_FLOAT,0,12,D3D11_INPUT_PER_VERTEX_DATA,0},
             {"TEXCOORD",0,DXGI_FORMAT_R32G32_FLOAT,0,24,D3D11_INPUT_PER_VERTEX_DATA,0}};
         check(device->CreateInputLayout(elements,3,vs->GetBufferPointer(),vs->GetBufferSize(),&layout),"Cannot create native input layout");
-        D3D11_BUFFER_DESC buffer{}; buffer.ByteWidth=160; buffer.Usage=D3D11_USAGE_DEFAULT; buffer.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
+        D3D11_BUFFER_DESC buffer{}; buffer.ByteWidth=304; buffer.Usage=D3D11_USAGE_DEFAULT; buffer.BindFlags=D3D11_BIND_CONSTANT_BUFFER;
         check(device->CreateBuffer(&buffer,nullptr,&constants),"Cannot create native camera buffer");
         D3D11_SAMPLER_DESC filtering{}; filtering.Filter=D3D11_FILTER_MIN_MAG_MIP_LINEAR;
         filtering.AddressU=filtering.AddressV=filtering.AddressW=D3D11_TEXTURE_ADDRESS_WRAP;
@@ -205,30 +212,62 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
         floor=geometry({{{-100,-8,0},{0,0,1},{0,0}},{{100,-8,0},{0,0,1},{40,0}},{{100,8,0},{0,0,1},{40,4}},{{-100,8,0},{0,0,1},{0,4}}},{0,1,2,0,2,3});
         uint8_t pixels[]{74,87,77,255,104,117,99,255,104,117,99,255,74,87,77,255}; floor.texture=rgba(2,2,pixels);
     }
-    void loadWorldGeometry(const World& world,const std::filesystem::path& assets) {
-        for(const auto& source:world.meshes)worldMeshes.push_back(geometry(source.vertices,source.indices));
+    void loadWorldGeometry(const World& world,const std::filesystem::path& assets,GpuWorld& gpu) {
+        for(const auto& source:world.meshes)gpu.meshes.push_back(geometry(source.vertices,source.indices));
         std::map<std::string,ComPtr<ID3D11ShaderResourceView>> cache;
         uint8_t white[]{255,255,255,255};auto fallback=rgba(1,1,white);
         for(const auto& m:world.materials) {
-            if(m.texture.empty())worldTextures.push_back(fallback);
+            if(m.texture.empty())gpu.textures.push_back(fallback);
             else {
                 if(!cache.contains(m.texture))cache[m.texture]=image(assets/std::filesystem::path(m.texture));
-                worldTextures.push_back(cache.at(m.texture));
+                gpu.textures.push_back(cache.at(m.texture));
             }
         }
     }
     void draw(GpuMesh& mesh,FXMMATRIX world,FXMMATRIX viewProjection,uint32_t first=0,uint32_t count=0,XMFLOAT4 tint={1,1,1,1},bool lit=true) {
-        struct Camera { XMFLOAT4X4 worldViewProjection,world;XMFLOAT4 tint,properties; } camera;
+        struct Camera { XMFLOAT4X4 worldViewProjection,world;XMFLOAT4 tint,properties,ambient;std::array<XMFLOAT4,4> directions,colors; } camera;
+        static_assert(sizeof(Camera)==304);
         XMStoreFloat4x4(&camera.worldViewProjection,XMMatrixTranspose(world*viewProjection));
         // Inverse transpose is required for authored nonuniform resource scale.
         XMStoreFloat4x4(&camera.world,XMMatrixInverse(nullptr,world));camera.tint=tint;camera.properties={lit?1.f:0.f,0,0,0};
+        camera.ambient=ambient;camera.directions=lightDirections;camera.colors=lightColors;
         context->UpdateSubresource(constants.Get(),0,nullptr,&camera,0,0);
         UINT stride=sizeof(DrawVertex),offset=0; context->IASetVertexBuffers(0,1,mesh.vertices.GetAddressOf(),&stride,&offset);
         context->IASetIndexBuffer(mesh.indices.Get(),DXGI_FORMAT_R32_UINT,0); context->PSSetShaderResources(0,1,mesh.texture.GetAddressOf());
         context->DrawIndexed(count?count:mesh.count,first,0); ++draws;
     }
-    void frame(const Model& model,const Player& player,unsigned course,const World* world=nullptr,XMFLOAT3 focus={},const CoursePlayer* actor=nullptr) {
-        const float color[]{.075f,.095f,.085f,1}; context->ClearRenderTargetView(target.Get(),color);
+    void drawWorld(const World& world,GpuWorld& gpu,unsigned course,FXMMATRIX viewProjection,XMFLOAT3 focus,bool cullDistant) {
+        for(const auto& instance:world.courses.at(course).instances) {
+            if(cullDistant&&std::abs(instance.transform._41-focus.x)>100)continue;
+            auto& mesh=gpu.meshes.at(instance.mesh);
+            for(const auto& surface:world.meshes[instance.mesh].surfaces) {
+                const auto& material=world.materials[surface.material];mesh.texture=gpu.textures.at(surface.material);
+                auto tint=material.color;tint.w*=instance.opacity;
+                draw(mesh,XMLoadFloat4x4(&instance.transform),viewProjection,surface.first,surface.count,tint,material.lit);
+            }
+        }
+    }
+    void lighting(const EnvironmentStage* stage) {
+        lightDirections={};lightColors={};ambient={.4f,.4f,.4f,0};
+        if(!stage) {
+            XMFLOAT3 direction;XMStoreFloat3(&direction,XMVector3Normalize(XMVectorSet(-.4f,-.6f,1,0)));
+            lightDirections[0]={direction.x,direction.y,direction.z,0};lightColors[0]={.6f,.6f,.6f,0};return;
+        }
+        ambient={};size_t directional=0;
+        for(const auto& light:stage->lights) {
+            XMFLOAT4 color{light.color.x*light.diffuseFactor,light.color.y*light.diffuseFactor,light.color.z*light.diffuseFactor,0};
+            if(light.type==0) { ambient.x+=color.x;ambient.y+=color.y;ambient.z+=color.z; }
+            else if(light.type==1&&directional<lightDirections.size()) {
+                // Source light travel direction is +Z, which becomes native +Y.
+                auto direction=XMVector3Normalize(XMVectorNegate(XMVector3TransformNormal(XMVectorSet(0,1,0,0),XMLoadFloat4x4(&light.transform))));
+                XMStoreFloat4(&lightDirections[directional],direction);lightColors[directional++]=color;
+            }
+        }
+    }
+    void frame(const Model& model,const Player& player,unsigned course,const World* world=nullptr,XMFLOAT3 focus={},const CoursePlayer* actor=nullptr,
+               const World* environment=nullptr,const EnvironmentStage* stage=nullptr,const CourseSession* session=nullptr) {
+        XMFLOAT4 color=stage?stage->background:XMFLOAT4{.075f,.095f,.085f,1};context->ClearRenderTargetView(target.Get(),&color.x);
+        lighting(stage);
         context->ClearDepthStencilView(depth.Get(),D3D11_CLEAR_DEPTH|D3D11_CLEAR_STENCIL,1,0);
         context->OMSetRenderTargets(1,target.GetAddressOf(),depth.Get()); D3D11_VIEWPORT viewport{0,0,1280,720,0,1}; context->RSSetViewports(1,&viewport);
         context->RSSetState(raster.Get()); context->IASetInputLayout(layout.Get()); context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -236,16 +275,20 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
         context->VSSetConstantBuffers(0,1,constants.GetAddressOf()); context->PSSetSamplers(0,1,sampler.GetAddressOf());
         context->PSSetConstantBuffers(0,1,constants.GetAddressOf());context->OMSetBlendState(blend.Get(),nullptr,0xffffffff);
         auto view=world ? XMMatrixLookAtLH(XMVectorSet(focus.x+3,-17,focus.z+6,1),XMVectorSet(focus.x,0,focus.z+1,1),XMVectorSet(0,0,1,0)) : XMMatrixLookAtLH(XMVectorSet(player.position.x+3,-5,2.3f,1),XMVectorSet(player.position.x,0,1,1),XMVectorSet(0,0,1,0));
-        auto projection=XMMatrixPerspectiveFovLH(XM_PIDIV4,1280.f/720,.05f,250.f), viewProjection=view*projection;
+        float fov=XM_PIDIV4;
+        if(world&&stage) {
+            const auto& camera=stage->camera;float pitch=XMConvertToRadians(camera.pitch),yaw=XMConvertToRadians(camera.yaw);
+            auto target=XMVectorAdd(XMLoadFloat3(&focus),XMLoadFloat3(&camera.lookAt));
+            auto offset=XMVectorSet(camera.distance*std::sin(pitch)*std::sin(yaw),camera.distance*std::sin(pitch)*std::cos(yaw),camera.distance*std::cos(pitch),0);
+            view=XMMatrixLookAtLH(XMVectorAdd(target,offset),target,XMVectorSet(0,0,1,0));
+            // Stage StartFov is horizontal at 4:3; the original camera keeps
+            // the resulting vertical angle when the output aspect changes.
+            fov=2*std::atan(.75f*std::tan(XMConvertToRadians(stage->startFov)*.5f));
+        }
+        auto projection=XMMatrixPerspectiveFovLH(fov,1280.f/720,.05f,250.f), viewProjection=view*projection;
         if(world) {
-            for(const auto& instance:world->courses[course].instances) {
-                if(std::abs(instance.transform._41-focus.x)>100)continue;
-                auto& gpu=worldMeshes[instance.mesh];
-                for(const auto& surface:world->meshes[instance.mesh].surfaces) {
-                    const auto& m=world->materials[surface.material];gpu.texture=worldTextures[surface.material];auto tint=m.color;tint.w*=instance.opacity;
-                    draw(gpu,XMLoadFloat4x4(&instance.transform),viewProjection,surface.first,surface.count,tint,m.lit);
-                }
-            }
+            if(environment)drawWorld(*environment,environmentGeometry,course,viewProjection,focus,false);
+            drawWorld(*world,courseGeometry,course,viewProjection,focus,true);
         } else draw(floor,XMMatrixIdentity(),viewProjection);
         const Clip* clip=nullptr; for(const auto& c:model.clips)if(c.name==player.animation)clip=&c;
         auto pose=actor?actor->pose():samplePose(model,clip,player.animationTime);
@@ -263,9 +306,15 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
         SetTextColor(dc,RGB(224,237,205));
         std::wstring text=actor?L"INDEPENDENT NATIVE ENGINE / COURSE MOVEMENT\n":world?L"INDEPENDENT NATIVE ENGINE / STATIC COURSE INSPECTION\n":L"INDEPENDENT NATIVE ENGINE / CHARACTER PREVIEW\n";
         if(course<model.courses.size()) { auto& level=model.courses[course]; text+=std::wstring(level.name.begin(),level.name.end())+L" / "+std::to_wstring(level.chunks.size())+L" original chunk definitions loaded\n"; }
-        text+=actor?L"A/D: move   Space: jump (hold for height)   R: restart   Tab: next course   Esc: close\n":world?L"A/D: pan camera   W/S: camera height   Tab: next course   Esc: close\n":L"A/D: move   Space: jump   Tab: course catalog   Esc: close\n";
-        text+=actor?L"Static platforms and native movement. Dynamic obstacles, environment, progression and full-game behavior are pending.\n":world?L"Original static meshes and chunk links. Dynamic actors, collision, original lighting and gameplay are pending.\n":L"D3D11 / PC animation / native simulation arena. Use --course-preview for static course inspection.\n";
+        text+=actor?L"A/D: move   Space: jump (hold for height)   R: checkpoint respawn   Tab: next course   Esc: close\n":world?L"A/D: pan camera   W/S: camera height   Tab: next course   Esc: close\n":L"A/D: move   Space: jump   Tab: course catalog   Esc: close\n";
+        text+=actor?L"Static platforms and scene triggers. Dynamic obstacles, effects, audio and full-game behavior are pending.\n":world?L"Static course and environment meshes. Dynamic actors, effects and full gameplay are pending.\n":L"D3D11 / PC animation / native simulation arena. Use --course-preview for static course inspection.\n";
         text+=L"Time "+std::to_wstring(player.clock)+L"  X "+std::to_wstring(player.position.x)+L"  "+std::wstring(player.animation.begin(),player.animation.end());
+        if(session) {
+            text+=L"\nRace "+std::to_wstring(session->elapsed())+L"  Checkpoints "+std::to_wstring(session->checkpointCount())+L"  Respawns "+std::to_wstring(session->respawnCount());
+            if(session->finished())text+=L"  Finish line crossed";
+            if(!session->hud().empty())text+=L"  Checkpoint";
+            if(!session->issues().empty())text+=L"  Script issues "+std::to_wstring(session->issues().size());
+        }
         RECT rect{24,20,1250,180}; DrawTextW(dc,text.c_str(),-1,&rect,DT_LEFT|DT_TOP|DT_NOPREFIX); SelectObject(dc,old);
         check(surface->ReleaseDC(nullptr),"Cannot release native HUD surface"); ++frames;
     }
@@ -296,7 +345,7 @@ int wmain(int argc,wchar_t** argv) {
             if(std::filesystem::exists(option.assets/L"scripts.dnl")) {
                 localPath(option.assets/L"scripts.dnl");auto chunks=loadScripts(option.assets/L"scripts.dnl");ScriptVm vm;
                 for(auto& chunk:chunks)vm.validate(chunk.code,chunk.source+":"+chunk.actor+":"+chunk.field);
-                std::cout<<"[NATIVE SCRIPT CHECK] compiled_chunks="<<chunks.size()<<" native_lua=1 scene_bindings_pending=1\n";
+                std::cout<<"[NATIVE SCRIPT CHECK] compiled_chunks="<<chunks.size()<<" native_lua=1 scene_bindings=partial\n";
             }
             float worst=0; auto pose=samplePose(model,nullptr,0);
             for(auto& mesh:model.meshes) { auto vertices=skin(mesh,pose); for(size_t i=0;i<vertices.size();++i) { auto a=XMLoadFloat3(&vertices[i].position),b=XMLoadFloat3(&mesh.vertices[i].position); worst=std::max(worst,XMVectorGetX(XMVector3Length(XMVectorSubtract(a,b)))); } }
@@ -323,30 +372,44 @@ int wmain(int argc,wchar_t** argv) {
                 std::cout<<"[NATIVE COLLISION CHECK] courses="<<collisions.size()<<" static_triangles="<<triangles<<" spawn_floor_rays=15\n";
                 if(option.coursePlay) {
                     localPath(option.assets/L"movement.dnp");auto settings=loadMovementSettings(option.assets/L"movement.dnp");
-                    CoursePlayer actor(model,settings);actor.reset(world.courses[option.level].spawn);
+                    CoursePlayer actor(model,settings);actor.reset(world.courses[option.level].spawn,CourseStart::Startup,model.courses[option.level].theme);
                     for(int i=0;i<120;++i)actor.tick({},1.f/60,collisions[option.level].scene);
                     if(!actor.grounded)throw std::runtime_error("Native course player cannot settle on the starting platform");
                     std::cout<<"[NATIVE PLAYER CHECK] course="<<option.level<<" settled_z="<<actor.position.z<<" grounded=1\n";
                 }
+                for(const auto* file:{L"environment.dnv",L"environment-world.dnw",L"scene.dns"})localPath(option.assets/file);
+                auto environment=loadEnvironment(option.assets/L"environment.dnv");auto backdrop=loadWorld(option.assets/L"environment-world.dnw");
+                auto scene=loadScene(option.assets/L"scene.dns");size_t records=0,boxes=0;
+                for(const auto& level:scene.courses) { records+=level.records.size();for(const auto& record:level.records)boxes+=record.boxes.size(); }
+                if(backdrop.courses.size()!=15||scene.courses.size()!=15)throw std::runtime_error("Native scene catalog is incomplete");
+                std::cout<<"[NATIVE SCENE CHECK] stages="<<environment.stages.size()<<" environment_meshes="<<backdrop.meshes.size()<<" trigger_records="<<records<<" trigger_boxes="<<boxes<<'\n';
             }
             std::cout<<"[NATIVE CHECK] rest_pose_max_error="<<worst<<" passed=1\n"; return 0;
         }
         check(CoInitializeEx(nullptr,COINIT_MULTITHREADED),"Cannot initialize native image services");
         struct ComCleanup { ~ComCleanup(){CoUninitialize();} } cleanup;
         NativeWindow window(option.hidden); Renderer renderer(window.handle); renderer.load(model,option.assets);
-        std::optional<World> world;
-        if(option.coursePreview) { localPath(option.assets/L"world.dnw");world=loadWorld(option.assets/L"world.dnw");renderer.loadWorldGeometry(*world,option.assets); }
+        std::optional<World> world,backdrop;std::optional<Environment> environment;
+        if(option.coursePreview) {
+            for(const auto* file:{L"world.dnw",L"environment.dnv",L"environment-world.dnw"})localPath(option.assets/file);
+            world=loadWorld(option.assets/L"world.dnw");renderer.loadWorldGeometry(*world,option.assets,renderer.courseGeometry);
+            backdrop=loadWorld(option.assets/L"environment-world.dnw");renderer.loadWorldGeometry(*backdrop,option.assets,renderer.environmentGeometry);
+            environment=loadEnvironment(option.assets/L"environment.dnv");
+        }
         std::unique_ptr<CoursePlayer> actor;std::vector<CourseCollision> collisions;float baseHeight=0;
+        std::optional<Scene> scene;std::vector<ScriptChunk> scriptChunks;std::unique_ptr<CourseSession> session;
         if(option.coursePlay) {
-            localPath(option.assets/L"movement.dnp");localPath(option.assets/L"static-collision.dnc");
+            for(const auto* file:{L"movement.dnp",L"static-collision.dnc",L"scene.dns",L"scripts.dnl"})localPath(option.assets/file);
             auto settings=loadMovementSettings(option.assets/L"movement.dnp");collisions=loadCollision(option.assets/L"static-collision.dnc");
-            actor=std::make_unique<CoursePlayer>(model,settings);actor->reset(world->courses[option.level].spawn);
+            actor=std::make_unique<CoursePlayer>(model,settings);actor->reset(world->courses[option.level].spawn,CourseStart::Startup,model.courses[option.level].theme);
+            scene=loadScene(option.assets/L"scene.dns");scriptChunks=loadScripts(option.assets/L"scripts.dnl");
+            session=std::make_unique<CourseSession>(scene->courses[option.level],scriptChunks,model.courses[option.level].theme,settings.feetOffset,settings.feetRadii);
             auto hit=collisions[option.level].scene.ray(actor->position,{0,0,-1},10);
             if(!hit)throw std::runtime_error("Native player start has no static floor");baseHeight=hit->position.z;
         }
         Player player; bool previousJump=false,previousTab=false,pendingJump=false,previousRestart=false,scriptHeld=false; unsigned course=option.level,captured=0;
         XMFLOAT3 focus=world?world->courses[course].spawn:XMFLOAT3{};
-        float maximumHeight=0; uint64_t ticks=0; float accumulator=0;
+        float maximumHeight=0; uint64_t ticks=0; float accumulator=0;size_t loggedIssues=0;
         std::ofstream trace;
         if(option.verifyPlayer) { trace.open(option.evidence/L"positions.csv");trace<<"tick,time,course,x,y,z,vx,vz,grounded,jumps,horizontal,jump_pressed,jump_held\n"<<std::setprecision(10);if(!trace)throw std::runtime_error("Cannot create native player trace"); }
         std::array<uint64_t,15> courseDraws{};
@@ -365,8 +428,16 @@ int wmain(int argc,wchar_t** argv) {
                 XINPUT_STATE state{}; if(XInputGetState(0,&state)==ERROR_SUCCESS) { if(std::abs(int(state.Gamepad.sThumbLX))>XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE)input.horizontal=float(state.Gamepad.sThumbLX)/32767.f; jump|=(state.Gamepad.wButtons&XINPUT_GAMEPAD_A)!=0; }
             }
             pendingJump|=jump&&!previousJump; previousJump=jump;
-            if(tab&&!previousTab) { course=(course+1)%unsigned(model.courses.size());if(world)focus=world->courses[course].spawn;if(actor)actor->reset(focus); } previousTab=tab;
-            if(restart&&!previousRestart&&actor)actor->reset(world->courses[course].spawn);previousRestart=restart;
+            if(tab&&!previousTab) {
+                course=(course+1)%unsigned(model.courses.size());if(world)focus=world->courses[course].spawn;
+                if(actor) {
+                    actor->reset(focus,CourseStart::Startup,model.courses[course].theme);
+                    auto settings=loadMovementSettings(option.assets/L"movement.dnp");
+                    session=std::make_unique<CourseSession>(scene->courses[course],scriptChunks,model.courses[course].theme,settings.feetOffset,settings.feetRadii);
+                    loggedIssues=0;
+                }
+            } previousTab=tab;
+            if(restart&&!previousRestart&&actor&&session)session->requestRespawn();previousRestart=restart;
             if(world && !actor && !option.verify) { focus.x+=input.horizontal*elapsed*15;focus.z+=vertical*elapsed*10; }
             const float step=actor?1.f/60:1.f/120;
             while(accumulator>=step) {
@@ -379,6 +450,11 @@ int wmain(int argc,wchar_t** argv) {
                         controls.jumpPressed=controls.jumpHeld&&!scriptHeld;scriptHeld=controls.jumpHeld;
                     }
                     actor->tick(controls,step,collisions[course].scene);
+                    session->tick(*actor,step);
+                    while(loggedIssues<session->issues().size()) {
+                        const auto& issue=session->issues()[loggedIssues++];
+                        std::cerr<<"[NATIVE SCENE ISSUE] record="<<issue.record<<" field="<<issue.field<<" task="<<issue.task<<" error="<<issue.error<<'\n';
+                    }
                     player.position=actor->position;player.velocity=actor->velocity;player.clock=float(actor->clock);player.animation=actor->animation;
                     focus=actor->position;
                     if(option.verifyPlayer)trace<<ticks<<','<<actor->clock<<','<<course<<','<<actor->position.x<<','<<actor->position.y<<','<<actor->position.z<<','
@@ -387,7 +463,8 @@ int wmain(int argc,wchar_t** argv) {
                 pendingJump=false;accumulator-=step;++ticks;maximumHeight=std::max(maximumHeight,player.position.z-baseHeight);
             }
             if(option.verifyCourses) { course=std::min(unsigned(player.clock),14u);focus=world->courses[course].inspection; }
-            auto beforeDraws=renderer.draws;renderer.frame(model,player,course,world?&*world:nullptr,focus,actor.get());
+            auto beforeDraws=renderer.draws;renderer.frame(model,player,course,world?&*world:nullptr,focus,actor.get(),backdrop?&*backdrop:nullptr,
+                environment?&environment->stageForCourse(course):nullptr,session.get());
             if(world)courseDraws[course]+=renderer.draws-beforeDraws;
             if(option.verifyPlayer) {
                 if(captured<4 && actor->clock>=std::array<double,4>{1.4,1.7,2.15,3.6}[captured]) { renderer.capture(option.evidence/(L"player-"+std::to_wstring(captured)+L".bmp"));++captured; }
@@ -405,6 +482,7 @@ int wmain(int argc,wchar_t** argv) {
             if(option.verifyCourses)passed &= std::all_of(courseDraws.begin(),courseDraws.end(),[](auto draws){return draws>4;});
             std::ofstream report(option.evidence/L"result.json"); report<<"{\"passed\":"<<(passed?"true":"false")<<",\"runtime\":\"independent-native\",\"scope\":\""<<(actor?"starting-platform-native-movement":world?"static-course-inspection":"character-animation-arena")<<"\",\"native_ticks\":"<<ticks<<",\"draws\":"<<renderer.draws<<",\"frames\":"<<renderer.frames<<",\"player_x\":"<<player.position.x<<",\"maximum_height\":"<<maximumHeight<<",\"captures\":"<<captured<<",\"courses_in_catalog\":"<<model.courses.size()<<",\"uses_xex\":false,\"uses_guest_memory\":false";
             if(actor)report<<",\"course\":"<<course<<",\"player_z\":"<<actor->position.z<<",\"grounded\":"<<(actor->grounded?"true":"false")<<",\"jumps\":"<<actor->jumps<<",\"landings\":"<<actor->landings;
+            if(session)report<<",\"scene_records\":"<<scene->courses[course].records.size()<<",\"script_issues\":"<<session->issues().size()<<",\"checkpoints\":"<<session->checkpointCount()<<",\"respawns\":"<<session->respawnCount();
             report<<",\"course_draws\":[";
             for(size_t i=0;i<courseDraws.size();++i) { if(i)report<<',';report<<courseDraws[i]; }report<<"]}\n";
             if(!report || !passed)throw std::runtime_error("Independent native verification did not complete");

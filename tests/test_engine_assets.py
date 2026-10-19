@@ -64,7 +64,8 @@ class EngineAssetsTests(unittest.TestCase):
         for k in CURVE_FIELDS:game[k]=[[0,1]]
         animation={k:[1.] for k in ANIMATION_FIELDS};animation['AnimSpeedChangePortion']=[.4]
         animation.update({k:[v] for k,v in {'Idle':'IDLE','Sprint':'BOOST','Jump':'JUMP',
-                         'FallIdle':'FALL','EasyLanding':'LAND','HardLanding':'HARD'}.items()})
+                         'FallIdle':'FALL','EasyLanding':'LAND','HardLanding':'HARD',
+                         'StartUpUsaIdle':'START_US','StartUpEuropeIdle':'START_EU','StartUpJapanIdle':'START_JP'}.items()})
         animation['MovementAnim']=['FAST','SLOW']
         scenes={'data/templates/gameconfig.wbr':[SceneRecord('GAMECONFIGMASTER','default',game)],
                 'data/templates/animation.wbr':[SceneRecord('ANIMATIONMASTER','default',animation)],
@@ -114,6 +115,15 @@ class EngineAssetsTests(unittest.TestCase):
         world=matrix_product(actor,local)
         point=[sum(world[i][j]*v for j,v in enumerate((1,0,0,1))) for i in range(4)]
         for a,b in zip(point,(12,22,30,1)):self.assertAlmostEqual(a,b)
+
+    def test_scene_angles_are_yaw_pitch_roll_in_original_component_order(self):
+        def point(matrix,value):return [sum(matrix[i][j]*v for j,v in enumerate(value+[1])) for i in range(3)]
+        yaw=transform((4,-2,0),(180,0,0))
+        result=point(yaw,[2,.5,0])
+        for a,b in zip(result,(2,-1.5,0)):self.assertAlmostEqual(a,b)
+        # Noncommuting axes distinguish the original yaw/pitch/roll order.
+        result=point(transform(angles=(90,90,90)),[1,0,0])
+        for a,b in zip(result,(-1,0,0)):self.assertAlmostEqual(a,b)
 
     def test_scene_values_have_no_addresses_or_execution_context(self):
         record=read_scene(scene())[0]

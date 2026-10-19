@@ -22,8 +22,10 @@ CoursePlayer::CoursePlayer(const Model& source,const MovementSettings& tuning):m
     need(settings.courseParameters,"Reconvert assets for native course-player settings");
     for(auto name:{"idle","run","run_fast","jump","fall","land"})(void)clip(name);
 }
-void CoursePlayer::reset(XMFLOAT3 spawn) {
+void CoursePlayer::reset(XMFLOAT3 spawn,CourseStart start,unsigned country) {
     need(std::isfinite(spawn.x)&&std::isfinite(spawn.y)&&std::isfinite(spawn.z),"Invalid native player spawn");
+    need(country<3,"Invalid native player country");theme=country;startup=start==CourseStart::Startup;
+    if(startup)(void)clip(std::array<const char*,3>{"startup_usa","startup_europe","startup_japan"}[theme]);
     position=spawn;velocity={};grounded=false;facing=1;clock=0;jumps=landings=contacts=0;
     jumping=false;queuedJump=jumpTime=idleTime=landTime=0;run.reset();running={};
     animation="fall";groundNormal={0,0,1};
@@ -31,12 +33,17 @@ void CoursePlayer::reset(XMFLOAT3 spawn) {
 void CoursePlayer::tick(CourseInput input,float seconds,const CollisionScene& collision) {
     need(std::isfinite(seconds)&&seconds>0&&seconds<=.05f&&std::isfinite(input.horizontal),"Invalid native course-player step");
     float axis=std::clamp(input.horizontal,-1.f,1.f),magnitude=std::abs(axis);
+    bool startupAtInput=startup;
+    if(startup&&magnitude>.001f)startup=false;
     auto previousVelocity=velocity;
     clock+=seconds;idleTime+=seconds;landTime=std::max(0.f,landTime-seconds);
     queuedJump=std::max(0.f,queuedJump-seconds);
     if(input.jumpPressed)queuedJump=settings.jumpQueue+seconds;
     bool wasGrounded=grounded,startedJump=false;
-    if(grounded&&queuedJump>0) {
+    // Input is sampled before the startup action changes to movement. A first
+    // direction/jump press can queue a jump for the next tick; Space alone
+    // never leaves the startup action.
+    if(!startupAtInput&&grounded&&queuedJump>0) {
         queuedJump=0;grounded=false;jumping=true;startedJump=true;jumpTime=0;landTime=0;
         velocity.x*=.9f;velocity.z=settings.gravity*settings.jumpGravityFactor*.9f;
         run.reset();running={};++jumps;
@@ -100,7 +107,8 @@ void CoursePlayer::tick(CourseInput input,float seconds,const CollisionScene& co
     } else if(!grounded&&wasGrounded&&!startedJump) {
         jumping=false;run.reset();running={};
     }
-    if(!grounded)animation=jumping?"jump":"fall";
+    if(startup)animation=std::array<const char*,3>{"startup_usa","startup_europe","startup_japan"}[theme];
+    else if(!grounded)animation=jumping?"jump":"fall";
     else if(running.active)animation="run";
     else animation=landTime>0?"land":"idle";
     need(std::isfinite(position.x)&&std::isfinite(position.y)&&std::isfinite(position.z),"Native course player became nonfinite");

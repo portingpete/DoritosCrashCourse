@@ -50,7 +50,10 @@ def movement_data(scenes):
     clips = {'idle': animation['Idle'][0], 'run': movement[0], 'run_fast': movement[1],
              'boost': animation['Sprint'][0], 'jump': animation['Jump'][0],
              'fall': animation['FallIdle'][0], 'land': animation['EasyLanding'][0],
-             'land_hard': animation['HardLanding'][0]}
+             'land_hard': animation['HardLanding'][0],
+             'startup_usa': animation['StartUpUsaIdle'][0],
+             'startup_europe': animation['StartUpEuropeIdle'][0],
+             'startup_japan': animation['StartUpJapanIdle'][0]}
     if any(not v or '/' in v or '\\' in v or '..' in v for v in clips.values()):
         raise AssetError('Invalid authored movement clip name')
     extra = []

@@ -12,7 +12,7 @@ void require(bool value,const char* message) { if(!value)throw std::runtime_erro
 int main(int argc,char** argv) {
     try {
         Model model;
-        for(auto name:{"idle","run","run_fast","jump","fall","land"}) {
+        for(auto name:{"idle","run","run_fast","jump","fall","land","startup_usa","startup_europe","startup_japan"}) {
             Clip clip;clip.name=name;clip.duration=1;
             if(clip.name=="run"||clip.name=="run_fast")clip.motion={{0,{}},{1,{0,-2,0}}};
             model.clips.push_back(clip);
@@ -21,7 +21,23 @@ int main(int argc,char** argv) {
         settings.gravity=-10;settings.jumpGravityFactor=-.5f;settings.jumpTimeFactor=.5f;settings.jumpQueue=.2f;
         settings.dragNoInput=10;settings.landRunFactor=.2f;settings.jumpSpeeds={0,6};settings.airSpeeds={0,6};
         CollisionScene floor({{{-50,-50,0},{50,-50,0},{50,50,0}},{{-50,-50,0},{50,50,0},{-50,50,0}}});
-        CoursePlayer player(model,settings);player.reset({0,0,1});
+        CoursePlayer starter(model,settings);starter.reset({0,0,1});
+        for(int i=0;i<120;++i)starter.tick({},1.f/60,floor);
+        for(int i=0;i<60;++i)starter.tick({0,i==0,i<30},1.f/60,floor);
+        require(starter.waitingForDirection()&&starter.jumps==0&&starter.grounded&&starter.animation=="startup_usa",
+                "Space alone incorrectly left native startup");
+        starter.tick({.001f,false,false},1.f/60,floor);
+        require(starter.waitingForDirection(),"Native startup ignored its direction threshold");
+        starter.tick({1,false,false},1.f/60,floor);
+        require(!starter.waitingForDirection()&&starter.running.active,"Direction did not enter normal native movement");
+        starter.reset({0,0,1},CourseStart::Startup,2);
+        for(int i=0;i<120;++i)starter.tick({},1.f/60,floor);
+        require(starter.animation=="startup_japan","Native startup selected the wrong country clip");
+        starter.tick({1,true,true},1.f/60,floor);
+        require(starter.jumps==0&&!starter.waitingForDirection(),"Startup jump was accepted before its movement transition");
+        starter.tick({1,false,true},1.f/60,floor);
+        require(starter.jumps==1&&!starter.grounded,"Startup direction/jump did not preserve its queued press");
+        CoursePlayer player(model,settings);player.reset({0,0,1},CourseStart::Ready);
         for(int i=0;i<120;++i)player.tick({},1.f/60,floor);
         require(player.grounded&&std::abs(player.position.z)<.0001f,"Native player did not settle on its base-point floor");
         auto jump=[&](int held) {
@@ -44,14 +60,15 @@ int main(int argc,char** argv) {
         for(int i=0;i<60;++i)climber.tick({1,false,false},1.f/60,slope);
         require(climber.grounded&&climber.position.x>1.5f&&std::abs(climber.position.z-climber.position.x*.25f)<.0002f,
                 "Native ground motion lost its slope-tangent displacement");
-        if(argc==2||argc==4) {
+        if(argc==2||argc==4||argc==5) {
             std::filesystem::path assets=argv[1];auto owned=loadModel(assets/"character.dne");auto tuning=loadMovementSettings(assets/"movement.dnp");
             auto courses=loadCollision(assets/"static-collision.dnc");auto world=loadWorld(assets/"world.dnw");
-            if(argc==4) {
+            if(argc==4||argc==5) {
+                require(argc!=5||std::string(argv[4])=="startup","Unknown native replay start state");
                 require(!std::filesystem::exists(argv[3]),"Replay output already exists");
                 std::ifstream input(argv[2]);std::string line;
                 require(bool(std::getline(input,line))&&line=="dt,horizontal,pressed,held","Invalid native replay header");
-                CoursePlayer actual(owned,tuning);actual.reset(world.courses[0].spawn);
+                CoursePlayer actual(owned,tuning);actual.reset(world.courses[0].spawn,argc==5?CourseStart::Startup:CourseStart::Ready);
                 for(int step=0;step<120;++step)actual.tick({},1.f/60,courses[0].scene);
                 std::ofstream output(argv[3]);output<<"step,x,y,z,vx,vz,grounded,jumps,animation\n"<<std::setprecision(10);
                 size_t step=0;
@@ -66,7 +83,7 @@ int main(int argc,char** argv) {
                 require(bool(output)&&step>0,"Native replay output failed");std::cout<<"Replayed "<<step<<" native course-player steps\n";return 0;
             }
             for(size_t i=0;i<world.courses.size();++i) {
-                CoursePlayer actual(owned,tuning);actual.reset(world.courses[i].spawn);
+                CoursePlayer actual(owned,tuning);actual.reset(world.courses[i].spawn,CourseStart::Startup,owned.courses[i].theme);
                 for(int step=0;step<120;++step)actual.tick({},1.f/60,courses[i].scene);
                 require(actual.grounded,"Native player missed an authored starting platform");
                 float base=actual.position.z,start=actual.position.x;
