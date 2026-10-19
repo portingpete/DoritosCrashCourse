@@ -1,0 +1,44 @@
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -267,24 +267,34 @@
+         for (size_t offset = 20; offset + 8 <= section.size; offset += 4)
+         {
+             if (word(offset) != 0x4E800420 || word(offset - 4) != 0x7C0903A6 ||
+-                word(offset - 8) != 0x7C0C002E || (word(offset - 12) & 0xFC1FFFFF) != 0x5400103A ||
+-                (word(offset - 16) >> 16) != 0x398C || (word(offset - 20) >> 16) != 0x3D80) continue;
++                word(offset - 8) != 0x7C0C002E || (word(offset - 20) >> 16) != 0x3D80) continue;
++            // Address construction and index rotation are independent. The
++            // title's audio-format switch schedules rlwinm between lis/addi.
++            // Recognize both orders while retaining exact registers/masks.
++            uint32_t adjustment = word(offset - 16), index = word(offset - 12);
++            if ((adjustment & 0xFC1FFFFF) == 0x5400103A && (index >> 16) == 0x398C)
++                std::swap(adjustment, index);
++            if ((index & 0xFC1FFFFF) != 0x5400103A || (adjustment >> 16) != 0x398C) continue;
+             uint32_t branch = uint32_t(section.base + offset);
+             bool supplied = false;
+             for (uint32_t i = 0; i < 6; ++i) supplied |= config.switchTables.contains(branch - i * 4);
+             if (supplied) continue;
+-            uint32_t tableAddress = ((word(offset - 20) & 0xFFFF) << 16) + int16_t(word(offset - 16));
++            uint32_t tableAddress = ((word(offset - 20) & 0xFFFF) << 16) + int16_t(adjustment);
+             if (tableAddress != branch + 4) continue;
+             RecompilerSwitchTable table{};
+-            table.r = (word(offset - 12) >> 21) & 31;
++            table.r = (index >> 21) & 31;
+             size_t firstCase = section.base + section.size;
+             size_t cursor = offset + 4;
+             while (section.base + cursor < firstCase && cursor + 4 <= section.size && table.labels.size() < 4096)
+             {
+                 uint32_t target = word(cursor);
+-                if ((target & 3) || target < tableAddress || target >= section.base + section.size) break;
++                if ((target & 3) || target < section.base || target >= section.base + section.size) break;
+                 table.labels.push_back(target);
+-                firstCase = (std::min)(firstCase, size_t(target));
++                // Shared/default bodies may precede the inline table. Only a
++                // forward body can bound its end; backward targets are still
++                // real edges and must remain in the generated switch.
++                if (target >= tableAddress)
++                    firstCase = (std::min)(firstCase, size_t(target));
+                 cursor += 4;
+             }
+             if (table.labels.empty() || section.base + cursor != firstCase)

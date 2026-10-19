@@ -1,0 +1,224 @@
+{
+  "name": "Kenney Input Prompts",
+  "version": "1.5A",
+  "author": "Kenney",
+  "source_url": "https://kenney.nl/assets/input-prompts",
+  "download_url": "https://kenney.nl/media/pages/assets/input-prompts/8de120163f-1783763952/kenney_input-prompts_1.5.zip",
+  "archive_sha256": "ac2fcf599080b0f3ba2d174c9474db6df1a0e96ff0662580e2da79a122ab78a1",
+  "license": "CC0-1.0",
+  "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "license_sha256": "ca2f58f80f903512119da5828868199478119818cd7ecffb303d625cb74cbb5a",
+  "variant": "Keyboard & Mouse/Default filled",
+  "files": [
+    {
+      "file": "keyboard_space.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_space.png",
+      "sha256": "8ce6f043b05888bd1655f7660f8f7cc02acb6c763fecf358fef20405239524bf",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_enter.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_enter.png",
+      "sha256": "f849f917caa0a7eaa5c2322acc62c1de8e18322036961a2282cd85f1eca302c1",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_escape.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_escape.png",
+      "sha256": "8874e394d80161d6188ffce8b715357fea8059a9d6627a28769a91e3855bcbd7",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_w.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_w.png",
+      "sha256": "17bbf72eccf90f548bcd039de007e77998f76d0b2010ce3b4450663a99521e26",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_a.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_a.png",
+      "sha256": "bb3b1d410bf8d05b34eed5e64cd22d28ecd5b40c2b69e8784da207241dc4caec",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_s.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_s.png",
+      "sha256": "09a945652d571fd165bb92d0d1238d2007be569b80220ae06514aba2cfc9a7f3",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_d.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_d.png",
+      "sha256": "6ca4515b5f56dd2730cb9acec3b183c8b2800ae641d75b434edd753e12bc36ad",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_arrow_up.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_arrow_up.png",
+      "sha256": "0506574ae05242a46478afb607be75a37026687835443c4d90bd57d459a7f4d4",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_arrow_down.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_arrow_down.png",
+      "sha256": "4ede88ceeda8cbf62c9f41db4a51f128db6018d624fd7a4253b1be3052ac06d1",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_arrow_left.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_arrow_left.png",
+      "sha256": "fae118df3d06bdf8850133bcd8c2f270b653aa4acc4e168cc3738670c32f8108",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_arrow_right.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_arrow_right.png",
+      "sha256": "6bdc83ab726280ebf73e91f602e2c2e3fe0fbe152fa94a1af7eefcb311d10995",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_q.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_q.png",
+      "sha256": "cee375cefc9e2f19089bbd669153af9099fe71e08b6c577d48eb2a32bc567c96",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_e.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_e.png",
+      "sha256": "1008502780281c8c2e06bebbc477a60f485d2260072b04611fbd294340f266d7",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_x.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_x.png",
+      "sha256": "fc4cb6a35566cf46e83efb5243bf42a11669554b1d0305d6b60a712a031e609f",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_y.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_y.png",
+      "sha256": "6ad1dd0e4c80af12ba4f860c9d09f7fd8af9b44c45847aa33330b0e8080adfab",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_p.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_p.png",
+      "sha256": "045d191e05815c0fe7e098ff300f1479b5ea31d65a9f8027ce318869d7288587",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_tab.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_tab.png",
+      "sha256": "2a759f1f70edb9fd8b1464098def1b096831e128d7b312eead7a3ba39870393f",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_shift.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_shift.png",
+      "sha256": "0c63e9e7d1175d72ee559d9a036ab4ee9bf099262b882f60049a499fb24cd247",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_ctrl.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_ctrl.png",
+      "sha256": "9f5339e48f9663aa1022791155ff09158e5caba5f2e93723adfbf804c1d9f24e",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_r.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_r.png",
+      "sha256": "153d158ec02c5b40cdded08fbf74389d1713fadf5b22029e77f2c518dd4c4973",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_f.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_f.png",
+      "sha256": "f22179ebd67f153dadc524e12bde0997078ded09bbaba545c37cd1bd86b84331",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_backspace.png",
+      "archive_entry": "Keyboard & Mouse/Default/keyboard_backspace.png",
+      "sha256": "7d9840393e667ef86dbe38184f26c0652618c05adb85df75d54675ee7eee31a7",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "mouse_left.png",
+      "archive_entry": "Keyboard & Mouse/Default/mouse_left.png",
+      "sha256": "80101392b423671e2812d2b64310bbd17f7c95c796f0c704dcf6c1a70d98cf35",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "mouse_right.png",
+      "archive_entry": "Keyboard & Mouse/Default/mouse_right.png",
+      "sha256": "da09ac410a994483f25d750a67765cfdc1166b14cdafd52e8ab9cf6f9a125c6e",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "mouse_scroll.png",
+      "archive_entry": "Keyboard & Mouse/Default/mouse_scroll.png",
+      "sha256": "a5f4ee08710f41b43f602ad60de0cae445b579bb310bdbd310f53f138ec366aa",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "mouse_scroll_up.png",
+      "archive_entry": "Keyboard & Mouse/Default/mouse_scroll_up.png",
+      "sha256": "a40644af51c37fc22d7c3477d28f1f400c31fad772022bb71e0300bdabe488ba",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "mouse_scroll_down.png",
+      "archive_entry": "Keyboard & Mouse/Default/mouse_scroll_down.png",
+      "sha256": "9260cfdd9969de24696a2501281423906f5bf3daccec17782b30938d694c8eef",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "keyboard_buttons_atlas.png",
+      "sha256": "2f65ecbd6e969dd0b8e7ce0c747cc9b27efc65145ab63492b793d20ebfd716ba",
+      "width": 512,
+      "height": 256,
+      "origin": "owned composition of CC0 Kenney icons",
+      "recipe": "tools/prepare_input_prompts.py compose-v1"
+    },
+    {
+      "file": "keyboard_controls_diagram.png",
+      "sha256": "76934c2d483ee05c34fb339c02f13bd3f699ef2a2241e8112be1a1d3523f1ca3",
+      "width": 1024,
+      "height": 256,
+      "origin": "owned composition of CC0 Kenney icons",
+      "recipe": "tools/prepare_input_prompts.py compose-v1"
+    }
+  ],
+  "composition": {
+    "recipe": "compose-v1",
+    "font": "arial.ttf",
+    "font_sha256": "b3658eadae55e682b5f69eb64c439c1ecc8f196c0bb8d4756d145d13bc86476a"
+  }
+}

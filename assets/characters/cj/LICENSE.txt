@@ -1,0 +1,11 @@
+CJ Carl Johnson model by derry@pennywise (abhishekambily)
+
+Licensed CC BY 4.0: https://creativecommons.org/licenses/by/4.0/
+Source: https://sketchfab.com/3d-models/cj-carl-johnson-3d-model-59463a7481e346cbb3622b150d3736d6
+
+Modified for this project: fitted geometry, transferred skin weights, adapted
+UV coordinates and textures, and Cal3D conversion. The original game rig,
+animations, model configuration and game files are not included here.
+
+These model assets retain their separate CC BY 4.0 terms. They are not
+relicensed under the source-code GPL. Preserve this attribution when sharing.

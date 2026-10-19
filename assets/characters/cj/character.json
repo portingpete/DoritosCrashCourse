@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "cj",
+  "name": "CJ (Carl Johnson)",
+  "skeleton_sha256": "599839637025264e824f1d018d4d79c8e3ee104d7cfb70373a7c920e801a5f54",
+  "mesh": {
+    "file": "model.cmf",
+    "sha256": "167b31fd25fe065d11eab7a11f1ad0d8002161603f82ec7c367e87e1586ad936"
+  },
+  "textures": [
+    {
+      "file": "diffuse-0.png",
+      "sha256": "7e7b16b614b6d6a11c4f61ca31bcc838f2724079e5a27e8f1342815dda568281"
+    },
+    {
+      "file": "diffuse-1.png",
+      "sha256": "23a76cbe97404a041df94129f3534349a47567d4ebb03150c0fe46db11659200"
+    },
+    {
+      "file": "diffuse-2.png",
+      "sha256": "aa777410620f1e10964eaa9cc175c0c5ed03aef727b263423a65ef997f2e85d1"
+    },
+    {
+      "file": "diffuse-3.png",
+      "sha256": "f48c57501c066aae40aa9b9e53656dac08d4176ef2e9470ab80e17e773e19e87"
+    }
+  ],
+  "author": "derry@pennywise (abhishekambily)",
+  "license": "CC-BY-4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "source_url": "https://sketchfab.com/3d-models/cj-carl-johnson-3d-model-59463a7481e346cbb3622b150d3736d6",
+  "modifications": "Fitted to the original game rig, weights transferred, UV origin adapted, converted to Cal3D; original game rig and animations are not included."
+}

@@ -1,0 +1,31 @@
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -297,7 +297,26 @@
+                     firstCase = (std::min)(firstCase, size_t(target));
+                 cursor += 4;
+             }
+-            if (table.labels.empty() || section.base + cursor != firstCase)
++            // Some shared error/default bodies sit between the table and
++            // its first forward case. Accept that gap only when the original
++            // unsigned compare plus bgt proves the exact number of entries.
++            bool guardedExtent = false;
++            for (size_t distance = 24; distance <= 60 && distance <= offset; distance += 4)
++            {
++                uint32_t compare = word(offset - distance);
++                if ((compare >> 26) != 10 || (compare & 0x00200000) ||
++                    ((compare >> 16) & 31) != table.r ||
++                    size_t(compare & 0xFFFF) + 1 != table.labels.size()) continue;
++                uint32_t condition = (compare >> 23) & 7;
++                for (size_t check = offset - distance + 4; check < offset - 20; check += 4)
++                {
++                    uint32_t guard = word(check);
++                    if ((guard >> 26) == 16 && ((guard >> 21) & 31) == 12 &&
++                        ((guard >> 16) & 31) == condition * 4 + 1 && !(guard & 3))
++                        guardedExtent = true;
++                }
++            }
++            if (table.labels.empty() || (section.base + cursor != firstCase && !guardedExtent))
+             {
+                 fmt::println("ERROR: Inline switch at {:X} has an ambiguous table boundary", branch);
+                 ++diagnosticCount;

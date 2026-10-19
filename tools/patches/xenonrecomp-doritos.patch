@@ -1,0 +1,361 @@
+diff --git a/XenonRecomp/recompiler.cpp b/XenonRecomp/recompiler.cpp
+--- a/XenonRecomp/recompiler.cpp
++++ b/XenonRecomp/recompiler.cpp
+@@ -453,20 +453,25 @@
+             }
+         };
+ 
+-    auto printConditionalBranch = [&](bool not_, const std::string_view& cond)
+-        {
+-            if (!instructionAddresses.contains(insn.operands[1]))
+-            {
+-                println("\tif ({}{}.{}) {{", not_ ? "!" : "", cr(insn.operands[0]), cond);
++    auto printBranchIf = [&](const std::string& condition, uint32_t target)
++        {
++            if (!instructionAddresses.contains(target))
++            {
++                // Known code outside this recovered function is a conditional tail call.
++                // Unknown targets retain an explicit semantic diagnostic and runtime trap.
++                println("\tif ({}) {{", condition);
+                 print("\t");
+-                printFunctionCall(insn.operands[1]);
++                printFunctionCall(target);
+                 println("\t\treturn;");
+                 println("\t}}");
+             }
+             else
+-            {
+-                println("\tif ({}{}.{}) goto loc_{:X};", not_ ? "!" : "", cr(insn.operands[0]), cond, insn.operands[1]);
+-            }
++                println("\tif ({}) goto loc_{:X};", condition, target);
++        };
++
++    auto printConditionalBranch = [&](bool not_, const std::string_view& cond)
++        {
++            printBranchIf(fmt::format("{}{}.{}", not_ ? "!" : "", cr(insn.operands[0]), cond), insn.operands[1]);
+         };
+ 
+     auto printSetFlushMode = [&](bool enable)
+@@ -576,6 +581,31 @@
+     {
+     case PPC_INST_ADD:
+         println("\t{}.u64 = {}.u64 + {}.u64;", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
++        if (strchr(insn.opcode->name, '.'))
++            println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
++        break;
++
++    case PPC_INST_ADDC:
++        // Xenon carry is computed from the low word; register arithmetic is unsigned.
++        println("\t{}.u64 = uint64_t({}.u32) + uint64_t({}.u32);", temp(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.ca = uint8_t({}.u64 >> 32);", xer(), temp());
++        println("\t{}.u64 = {}.u64 + {}.u64;", r(insn.operands[0]), r(insn.operands[1]), r(insn.operands[2]));
++        if (strchr(insn.opcode->name, '.'))
++            println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
++        break;
++
++    case PPC_INST_ADDME:
++        println("\t{}.u64 = {}.u64 + uint64_t({}.ca) - uint64_t(1);", temp(), r(insn.operands[1]), xer());
++        println("\t{}.ca = ({}.u32 != 0) || {}.ca;", xer(), r(insn.operands[1]), xer());
++        println("\t{}.u64 = {}.u64;", r(insn.operands[0]), temp());
++        if (strchr(insn.opcode->name, '.'))
++            println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
++        break;
++
++    case PPC_INST_SUBFZE:
++        println("\t{}.u64 = ~{}.u64 + uint64_t({}.ca);", temp(), r(insn.operands[1]), xer());
++        println("\t{}.ca = ({}.u32 == 0) && {}.ca;", xer(), r(insn.operands[1]), xer());
++        println("\t{}.u64 = {}.u64;", r(insn.operands[0]), temp());
+         if (strchr(insn.opcode->name, '.'))
+             println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
+         break;
+@@ -709,7 +739,7 @@
+ 
+     case PPC_INST_BDZ:
+         println("\t--{}.u64;", ctr());
+-        println("\tif ({}.u32 == 0) goto loc_{:X};", ctr(), insn.operands[0]);
++        printBranchIf(fmt::format("{}.u32 == 0", ctr()), insn.operands[0]);
+         break;
+ 
+     case PPC_INST_BDZLR:
+@@ -719,14 +749,23 @@
+ 
+     case PPC_INST_BDNZ:
+         println("\t--{}.u64;", ctr());
+-        println("\tif ({}.u32 != 0) goto loc_{:X};", ctr(), insn.operands[0]);
++        printBranchIf(fmt::format("{}.u32 != 0", ctr()), insn.operands[0]);
+         break;
+ 
+     case PPC_INST_BDNZF:
+-        // NOTE: assuming eq here as a shortcut because all the instructions in the game do that
++    case PPC_INST_BDNZT:
++    case PPC_INST_BDZF:
++    case PPC_INST_BDZT:
++    {
++        // BI names one of all 32 CR bits; neither equality nor CR0 is implied.
++        static const char* bits[] = { "lt", "gt", "eq", "so" };
++        const bool zero = id == PPC_INST_BDZF || id == PPC_INST_BDZT;
++        const bool truth = id == PPC_INST_BDNZT || id == PPC_INST_BDZT;
+         println("\t--{}.u64;", ctr());
+-        println("\tif ({}.u32 != 0 && !{}.eq) goto loc_{:X};", ctr(), cr(insn.operands[0] / 4), insn.operands[1]);
+-        break;
++        printBranchIf(fmt::format("{}.u64 {} 0 && {}{}.{}", ctr(), zero ? "==" : "!=",
++            truth ? "" : "!", cr(insn.operands[0] / 4), bits[insn.operands[0] % 4]), insn.operands[1]);
++        break;
++    }
+ 
+     case PPC_INST_BEQ:
+         printConditionalBranch(false, "eq");
+@@ -1095,6 +1134,110 @@
+         println("\t{}.f64 = double(float({}.f64 - {}.f64));", f(insn.operands[0]), f(insn.operands[1]), f(insn.operands[2]));
+         break;
+ 
++    case PPC_INST_LBZUX:
++        if (insn.operands[1] == 0 || insn.operands[0] == insn.operands[1]) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-load register operands\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPC_LOAD_U8({});", r(insn.operands[0]), ea());
++        println("\t{}.u64 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_LDUX:
++        if (insn.operands[1] == 0 || insn.operands[0] == insn.operands[1]) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-load register operands\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPC_LOAD_U64({});", r(insn.operands[0]), ea());
++        println("\t{}.u64 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_LFDU:
++        if (insn.operands[2] == 0) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-load register operands\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        printSetFlushMode(false);
++        println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPC_LOAD_U64({});", f(insn.operands[0]), ea());
++        println("\t{}.u64 = {};", r(insn.operands[2]), ea());
++        break;
++
++    case PPC_INST_LFSU:
++        if (insn.operands[2] == 0) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-load register operands\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        printSetFlushMode(false);
++        println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u32 = PPC_LOAD_U32({});", temp(), ea());
++        println("\t{}.f64 = double({}.f32);", f(insn.operands[0]), temp());
++        println("\t{}.u64 = {};", r(insn.operands[2]), ea());
++        break;
++
++    case PPC_INST_LFSUX:
++        if (insn.operands[1] == 0) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-load register operands\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        printSetFlushMode(false);
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u32 = PPC_LOAD_U32({});", temp(), ea());
++        println("\t{}.f64 = double({}.f32);", f(insn.operands[0]), temp());
++        println("\t{}.u64 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_LHAU:
++        if (insn.operands[2] == 0 || insn.operands[0] == insn.operands[2]) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-load register operands\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.s64 = int16_t(PPC_LOAD_U16({}));", r(insn.operands[0]), ea());
++        println("\t{}.u64 = {};", r(insn.operands[2]), ea());
++        break;
++
++    case PPC_INST_LHZU:
++        if (insn.operands[2] == 0 || insn.operands[0] == insn.operands[2]) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-load register operands\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPC_LOAD_U16({});", r(insn.operands[0]), ea());
++        println("\t{}.u64 = {};", r(insn.operands[2]), ea());
++        break;
++
++    case PPC_INST_LHZUX:
++        if (insn.operands[1] == 0 || insn.operands[0] == insn.operands[1]) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-load register operands\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPC_LOAD_U16({});", r(insn.operands[0]), ea());
++        println("\t{}.u64 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_LWZUX:
++        if (insn.operands[1] == 0 || insn.operands[0] == insn.operands[1]) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-load register operands\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.u64 = PPC_LOAD_U32({});", r(insn.operands[0]), ea());
++        println("\t{}.u64 = {};", r(insn.operands[1]), ea());
++        break;
++
+     case PPC_INST_LBZ:
+         print("\t{}.u64 = PPC_LOAD_U8(", r(insn.operands[0]));
+         if (insn.operands[2] != 0)
+@@ -1191,6 +1334,13 @@
+         println("{}.u32));", r(insn.operands[2]));
+         break;
+ 
++    case PPC_INST_LHBRX:
++        print("\t{}.u64 = __builtin_bswap16(PPC_LOAD_U16(", r(insn.operands[0]));
++        if (insn.operands[1] != 0)
++            print("{}.u32 + ", r(insn.operands[1]));
++        println("{}.u32));", r(insn.operands[2]));
++        break;
++
+     case PPC_INST_LHZ:
+         print("\t{}.u64 = PPC_LOAD_U16(", r(insn.operands[0]));
+         if (insn.operands[2] != 0)
+@@ -1213,6 +1363,7 @@
+         println("\t{}.s64 = {};", r(insn.operands[0]), int32_t(insn.operands[1] << 16));
+         break;
+ 
++    case PPC_INST_LVEHX:
+     case PPC_INST_LVEWX:
+     case PPC_INST_LVEWX128:
+     case PPC_INST_LVX:
+@@ -1563,6 +1714,88 @@
+         println("\t{}.u64 = {}.u8 & 0x20 ? 0 : ({}.u32 >> ({}.u8 & 0x3F));", r(insn.operands[0]), r(insn.operands[2]), r(insn.operands[1]), r(insn.operands[2]));
+         if (strchr(insn.opcode->name, '.'))
+             println("\t{}.compare<int32_t>({}.s32, 0, {});", cr(0), r(insn.operands[0]), xer());
++        break;
++
++    case PPC_INST_STBUX:
++        if (insn.operands[1] == 0) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-store base register\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\tPPC_STORE_U8({}, {}.u8);", ea(), r(insn.operands[0]));
++        println("\t{}.u64 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_STDUX:
++        if (insn.operands[1] == 0) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-store base register\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\tPPC_STORE_U64({}, {}.u64);", ea(), r(insn.operands[0]));
++        println("\t{}.u64 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_STFDU:
++        if (insn.operands[2] == 0) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-store base register\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        printSetFlushMode(false);
++        println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
++        println("\tPPC_STORE_U64({}, {}.u64);", ea(), f(insn.operands[0]));
++        println("\t{}.u64 = {};", r(insn.operands[2]), ea());
++        break;
++
++    case PPC_INST_STFSU:
++        if (insn.operands[2] == 0) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-store base register\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        printSetFlushMode(false);
++        println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.f32 = float({}.f64);", temp(), f(insn.operands[0]));
++        println("\tPPC_STORE_U32({}, {}.u32);", ea(), temp());
++        println("\t{}.u64 = {};", r(insn.operands[2]), ea());
++        break;
++
++    case PPC_INST_STFSUX:
++        if (insn.operands[1] == 0) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-store base register\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        printSetFlushMode(false);
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\t{}.f32 = float({}.f64);", temp(), f(insn.operands[0]));
++        println("\tPPC_STORE_U32({}, {}.u32);", ea(), temp());
++        println("\t{}.u64 = {};", r(insn.operands[1]), ea());
++        break;
++
++    case PPC_INST_STHU:
++        if (insn.operands[2] == 0) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-store base register\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        println("\t{} = {} + {}.u32;", ea(), int32_t(insn.operands[1]), r(insn.operands[2]));
++        println("\tPPC_STORE_U16({}, {}.u16);", ea(), r(insn.operands[0]));
++        println("\t{}.u64 = {};", r(insn.operands[2]), ea());
++        break;
++
++    case PPC_INST_STHUX:
++        if (insn.operands[1] == 0) {
++            println("\tPPC_RECOMP_FAILURE(ctx, 0x{:X}, \"invalid update-store base register\");", base);
++            ++diagnosticCount;
++            break;
++        }
++        println("\t{} = {}.u32 + {}.u32;", ea(), r(insn.operands[1]), r(insn.operands[2]));
++        println("\tPPC_STORE_U16({}, {}.u16);", ea(), r(insn.operands[0]));
++        println("\t{}.u64 = {};", r(insn.operands[1]), ea());
+         break;
+ 
+     case PPC_INST_STB:
+@@ -2294,6 +2527,15 @@
+             println("\t{}.u8[{}] = {}.u8[{}] << ({}.u8[{}] & 0x7);", v(insn.operands[0]), i, v(insn.operands[1]), i, v(insn.operands[2]), i);
+         break;
+ 
++    case PPC_INST_VSLO:
++    case PPC_INST_VSLO128:
++        // Guest byte 15 is host byte 0 because this generator reverses the whole vector.
++        println("\t{}.u32 = ({}.u8[0] >> 3) & 15;", temp(), v(insn.operands[2]));
++        println("\t{} = {};", vTemp(), v(insn.operands[1]));
++        for (size_t i = 0; i < 16; i++)
++            println("\t{}.u8[{}] = {} >= {}.u32 ? {}.u8[{} - {}.u32] : 0;", v(insn.operands[0]), i, i, temp(), vTemp(), i, temp());
++        break;
++
+     case PPC_INST_VSLDOI:
+     case PPC_INST_VSLDOI128:
+         println("\tsimde_mm_store_si128((simde__m128i*){}.u8, simde_mm_alignr_epi8(simde_mm_load_si128((simde__m128i*){}.u8), simde_mm_load_si128((simde__m128i*){}.u8), {}));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]), 16 - insn.operands[3]);
+@@ -2400,6 +2642,15 @@
+     case PPC_INST_VSUBFP128:
+         printSetFlushMode(true);
+         println("\tsimde_mm_store_ps({}.f32, simde_mm_sub_ps(simde_mm_load_ps({}.f32), simde_mm_load_ps({}.f32)));", v(insn.operands[0]), v(insn.operands[1]), v(insn.operands[2]));
++        break;
++
++    case PPC_INST_VSUBSBS:
++        for (size_t i = 0; i < 16; i++)
++        {
++            println("\t{}.s32 = int32_t({}.s8[{}]) - int32_t({}.s8[{}]);", temp(), v(insn.operands[1]), i, v(insn.operands[2]), i);
++            println("\tif ({}.s32 < -128 || {}.s32 > 127) ctx.vscr |= 1u;", temp(), temp());
++            println("\t{}.s8[{}] = int8_t({}.s32 < -128 ? -128 : {}.s32 > 127 ? 127 : {}.s32);", v(insn.operands[0]), i, temp(), temp(), temp());
++        }
+         break;
+ 
+     case PPC_INST_VSUBSHS:

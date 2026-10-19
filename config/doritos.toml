@@ -1,0 +1,20 @@
+# Preserve every guest register across calls until real gameplay proves an ABI optimization.
+[main]
+file_path = "../game/default.xex"
+switch_table_file_path = "switch_tables.toml"
+skip_lr = false
+skip_msr = false
+ctr_as_local = false
+xer_as_local = false
+reserved_as_local = false
+cr_as_local = false
+non_argument_as_local = false
+non_volatile_as_local = false
+savegprlr_14_address = 0x825D5A80
+restgprlr_14_address = 0x825D5AD0
+savefpr_14_address = 0x825D6000
+restfpr_14_address = 0x825D604C
+savevmx_14_address = 0x825D7040
+restvmx_14_address = 0x825D72D8
+savevmx_64_address = 0x825D70D4
+restvmx_64_address = 0x825D736C

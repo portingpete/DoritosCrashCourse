@@ -1,0 +1,48 @@
+# Explicit offline AOT corrections for the supported encrypted title.
+# Labels are metadata only; the independent oracle re-reads the original
+# BE16 table and validates its dispatch instructions, selector, and addresses.
+# These nonlocal bounds were audited through all original incoming CFG edges.
+
+# The original mr r31,r4 at 0x823DA788 dominates this dispatch.
+# Unsigned r4 <=18 is guarded at 0x823DA790/798; setup has no alternate entry.
+[[switch]]
+base = 0x823DA7C0
+r = 31
+labels = [0x823DA7C4, 0x823DA7E4, 0x823DA810, 0x823DA828, 0x823DA88C, 0x823DA8BC, 0x823DA8F8, 0x823DA998, 0x823DAA1C, 0x823DAA7C, 0x823DAADC, 0x823DAB10, 0x823DAB54, 0x823DAB80, 0x823DABA8, 0x823DABD0, 0x823DAC04, 0x823DA988, 0x823DA998]
+table = 0x820030E8
+entry_bytes = 2
+scale = 1
+code_base = 0x823DA7C4
+
+# Initial unsigned r7 <=13 guard at 0x8270FCD8/E4 dominates initial setup.
+# Every loop backedge reloads r7 and compares <=13 at 0x82710034/38 before 0x8270FD18.
+[[switch]]
+base = 0x8270FD3C
+r = 7
+labels = [0x8270FD40, 0x8270FDC8, 0x82710058, 0x827100A8, 0x82710100, 0x82710154, 0x827101B4, 0x8270FE40, 0x8270FEC0, 0x8270FF10, 0x8270FF68, 0x8270FFC0, 0x827101D8, 0x827101E0]
+table = 0x820D3F70
+entry_bytes = 2
+scale = 1
+code_base = 0x8270FD40
+
+# The 4-bit extraction into r29 at 0x82742870 dominates this dispatch.
+# It is the only r29 writer in 0x82742488..0x82742BC0; calls preserve nonvolatile r29.
+[[switch]]
+base = 0x82742BAC
+r = 29
+labels = [0x82742BB0, 0x82742BB0, 0x827426A4, 0x82742BB0, 0x82742BB0, 0x82742BB0, 0x82742BB0, 0x827426A4, 0x827426A4, 0x82742BB0, 0x827426A4, 0x827426A4, 0x82742BB0, 0x82742BB0, 0x82742BB0, 0x82742BB0]
+table = 0x820DC5B8
+entry_bytes = 2
+scale = 1
+code_base = 0x827426A4
+
+# The initial unsigned r9 <=14 guard at 0x8268E228/230 dominates both inline switches.
+# All first-switch and loop edges reaching this second dispatch preserve r9.
+[[switch]]
+base = 0x8268E2B0
+r = 9
+labels = [0x8268E2F4, 0x8268E2FC, 0x8268E304, 0x8268E30C, 0x8268E314, 0x8268E31C, 0x8268E324, 0x8268E32C, 0x8268E334, 0x8268E33C, 0x8268E344, 0x8268E350, 0x8268E358, 0x8268E360, 0x8268E368]
+table = 0x820B0CF0
+entry_bytes = 2
+scale = 1
+code_base = 0x8268DF40

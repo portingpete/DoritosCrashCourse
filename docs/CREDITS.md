@@ -1,0 +1,11 @@
+# Credits and provenance
+
+- **Doritos Crash Course:** original game by Behaviour Interactive, published by Microsoft. All original game files are supplied locally by the player and excluded from this repository.
+- **Native port:** portingpete project, developed with assistance from OpenAI Codex. Live course testing used Luna Max agents with isolated copied saves. Code is GPL-3.0; see [COPYING](../COPYING).
+- **XenonRecomp:** [hedge-dev/XenonRecomp](https://github.com/hedge-dev/XenonRecomp), pinned to `c5bfd90d87f2ed0db8cff5c19ea3aff0e161e527`, fetched locally with its dependencies. The project uses the generator and LZX data-format library, not an emulator runtime.
+- **The Darkness Recomp:** [revision 4f711819bbc6ea12633a3b031454b86b5c0d929e](https://github.com/portingpete/The-Darkness-Recomp/tree/4f711819bbc6ea12633a3b031454b86b5c0d929e), source of the base generator patches and adapted PPC context template, under GPLv3. Additional generator changes are described in [patch provenance](../tools/patches/README.md).
+- **CJ Carl Johnson model:** derry@pennywise (`abhishekambily`), [model source](https://sketchfab.com/3d-models/cj-carl-johnson-3d-model-59463a7481e346cbb3622b150d3736d6), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Modified geometry fitting, skin weights, UV/texture adaptation and Cal3D conversion. The repository preview shows this converted model. Preserve [the model attribution](../assets/characters/cj/LICENSE.txt) when redistributing these assets. Original game rig and animation files are excluded.
+- **Kenney Input Prompts 1.5A:** [Kenney](https://kenney.nl/assets/input-prompts), [CC0](https://creativecommons.org/publicdomain/zero/1.0/), filled keyboard/mouse variants. Source hashes and license are retained under `assets/input-prompts/`.
+- **Cal3D hardware partition reference:** [Cal3D hardwaremodel.cpp](https://github.com/mp3butcher/Cal3D/blob/master/cal3d/src/cal3d/hardwaremodel.cpp), used alongside observed loader behavior to design independent conversion checks.
+
+CJ asset terms are separate from the GPL source-code license. Character and game names are used to identify their respective works; this fan port is independent of their owners.

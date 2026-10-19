@@ -1,0 +1,28 @@
+name: Portable contracts
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  tools:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Python version
+        run: python --version
+      - name: Audit public source
+        run: python tools/audit_public_source.py --staged
+      - name: Character importer
+        run: python -m unittest discover -s tests -p test_character_importer.py
+      - name: Cal3D converter
+        run: python -m unittest discover -s tests -p test_cal3d_character.py
+      - name: Character declaration
+        run: python -m unittest discover -s tests -p test_prepare_native_character.py
+      - name: Material declaration
+        run: python -m unittest discover -s tests -p test_prepare_native_materials.py
+      - name: Texture declaration
+        run: python -m unittest discover -s tests -p test_prepare_native_textures.py
+      - name: Checked input prompts
+        run: python tools/prepare_input_prompts.py --header build_native/input_prompts.h

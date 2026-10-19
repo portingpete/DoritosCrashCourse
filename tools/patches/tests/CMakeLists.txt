@@ -1,0 +1,43 @@
+cmake_minimum_required(VERSION 3.24)
+project(DoritosGeneratorRegression LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+get_filename_component(DORITOS_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../.." ABSOLUTE)
+set(DORITOS_XENON_DIR "${DORITOS_ROOT}/third_party/XenonRecomp")
+if(NOT TARGET XenonUtils)
+    add_subdirectory("${DORITOS_XENON_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/upstream" EXCLUDE_FROM_ALL)
+endif()
+add_executable(DoritosUpdateEmitter update_emitter.cpp
+    "${DORITOS_XENON_DIR}/XenonRecomp/recompiler.cpp"
+    "${DORITOS_XENON_DIR}/XenonRecomp/recompiler_config.cpp")
+target_include_directories(DoritosUpdateEmitter PRIVATE "${DORITOS_XENON_DIR}/XenonRecomp")
+target_precompile_headers(DoritosUpdateEmitter PRIVATE "${DORITOS_XENON_DIR}/XenonRecomp/pch.h")
+target_compile_definitions(DoritosUpdateEmitter PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
+target_link_libraries(DoritosUpdateEmitter PRIVATE LibXenonAnalyse XenonUtils fmt::fmt tomlplusplus::tomlplusplus xxHash::xxhash)
+set(FIXTURE "${CMAKE_CURRENT_BINARY_DIR}/translated_updates.inc")
+add_custom_command(OUTPUT "${FIXTURE}" COMMAND DoritosUpdateEmitter "${FIXTURE}" DEPENDS DoritosUpdateEmitter VERBATIM)
+add_executable(DoritosUpdateTests update_tests.cpp "${FIXTURE}")
+target_include_directories(DoritosUpdateTests PRIVATE "${CMAKE_CURRENT_BINARY_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${DORITOS_ROOT}/runtime/guest" "${DORITOS_XENON_DIR}/thirdparty/simde")
+target_compile_definitions(DoritosUpdateTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(DoritosUpdateTests PRIVATE /fp:strict)
+enable_testing()
+add_test(NAME GeneratorUpdateAndBranchContract COMMAND DoritosUpdateTests)
+add_executable(DoritosCarryVectorEmitter carry_vector_emitter.cpp
+    "${DORITOS_XENON_DIR}/XenonRecomp/recompiler.cpp"
+    "${DORITOS_XENON_DIR}/XenonRecomp/recompiler_config.cpp")
+target_include_directories(DoritosCarryVectorEmitter PRIVATE "${DORITOS_XENON_DIR}/XenonRecomp")
+target_precompile_headers(DoritosCarryVectorEmitter PRIVATE "${DORITOS_XENON_DIR}/XenonRecomp/pch.h")
+target_compile_definitions(DoritosCarryVectorEmitter PRIVATE NOMINMAX _CRT_SECURE_NO_WARNINGS)
+target_link_libraries(DoritosCarryVectorEmitter PRIVATE LibXenonAnalyse XenonUtils fmt::fmt tomlplusplus::tomlplusplus xxHash::xxhash)
+set(CARRY_FIXTURE "${CMAKE_CURRENT_BINARY_DIR}/translated_carry_vector.cpp")
+add_custom_command(OUTPUT "${CARRY_FIXTURE}" COMMAND DoritosCarryVectorEmitter "${CARRY_FIXTURE}"
+    DEPENDS DoritosCarryVectorEmitter VERBATIM)
+add_executable(DoritosCarryVectorTests carry_vector_tests.cpp "${CARRY_FIXTURE}")
+target_include_directories(DoritosCarryVectorTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${DORITOS_ROOT}/runtime/guest" "${DORITOS_XENON_DIR}/thirdparty/simde")
+target_compile_definitions(DoritosCarryVectorTests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_compile_options(DoritosCarryVectorTests PRIVATE /fp:strict)
+add_test(NAME GeneratorCarryAndVectorContract COMMAND DoritosCarryVectorTests)
+find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
+add_test(NAME AOTIntegrityGateContract COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test_generation_gate.py")

@@ -1,0 +1,20 @@
+/game/**
+!/game/.gitkeep
+/build_native/
+/third_party/
+__pycache__/
+*.pyc
+*.log
+/saves/
+/local/
+/.vs/
+/Tester Build/
+/DoritosCrashCourse-Tester-*.zip
+/DoritosCrashCourse-Tester-*.zip.sha256
+/DoritosCrashCourse-Tester/
+/MODLOG.md
+/MODDING_PLAN.md
+.env
+.env.*
+*.blend
+*.blend1

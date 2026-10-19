@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.cmd text eol=crlf
+*.patch -whitespace
+*.cmf -text
+*.png -text
+assets/** -text whitespace=cr-at-eol
