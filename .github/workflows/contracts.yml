@@ -26,3 +26,16 @@ jobs:
         run: python -m unittest discover -s tests -p test_prepare_native_textures.py
       - name: Checked input prompts
         run: python tools/prepare_input_prompts.py --header build_native/input_prompts.h
+  independent-engine:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - name: Configure independent native engine
+        run: cmake -S . -B build_native/engine -G "Visual Studio 17 2022" -A x64 -T ClangCL -DDORITOS_ENGINE_ONLY=ON
+      - name: Build independent native engine
+        run: cmake --build build_native/engine --config Release --parallel 4
+      - name: Independent native contracts
+        run: ctest --test-dir build_native/engine -C Release --output-on-failure
