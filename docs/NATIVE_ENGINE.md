@@ -26,7 +26,7 @@ Use the same Windows x64, VS 2022 + ClangCL, Windows SDK, CMake and Python requi
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/build_engine.ps1
-.\Native Engine Preview.cmd
+& '.\Native Engine Preview.cmd'
 ```
 
 The preview uses the bundled CJ pack by default. To prepare another installed character, pass `-Character <pack-id>` to the build script. Conversion does not change the working port's selected character.
@@ -36,7 +36,7 @@ In the preview, A/D moves, Space jumps, Tab cycles the course catalog and Escape
 To inspect original static course layouts:
 
 ```powershell
-.\Native Engine Preview.cmd --course-preview --level 0
+& '.\Native Engine Preview.cmd' --course-preview --level 0
 ```
 
 This mode uses A/D to pan the camera, W/S to change camera height and Tab to load the next course. CJ remains at the authored start position. It shows static RVM geometry and diffuse materials with a simple native light. Animated/attached/procedurally constructed actors, environment rendering, original lighting/shader effects, collision and obstacle simulation are still pending. It is a course inspector, not a playable course replacement. The converter reports omitted attached actors and unresolved resources instead of treating them as implemented.
