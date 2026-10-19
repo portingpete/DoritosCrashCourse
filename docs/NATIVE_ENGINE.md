@@ -16,6 +16,7 @@ The rewrite replaces the recompiled engine with ordinary PC data structures and 
 - Native triangle queries with an engine-built spatial tree, using 25,390 converted static platform triangles across the 15 courses. Downward rays locate all 15 authored starting platforms. Continuous ellipsoid sweeps handle triangle faces, edges and vertices, initial overlaps and sliding. The native course player uses these responses and a separate base-point grounding query. Dynamic obstacle collision remains pending.
 - Locally converted movement settings, collider offset/radii and eight movement/landing clips, including slow/fast authored motion. Native course movement includes inertia, no-input drag, playback speed, slow/fast motion blending, airborne steering, held jumps, gravity, adaptive movement substeps and landing. Synthetic tests cover settlement, held-jump height, release/repress behavior and swept walls. Turns/braking, other action states and obstacle interactions remain unfinished.
 - Structural readers parse all 183 scene files, 56 resource templates, 106 animation files, 153 static mesh files and 36 collision mesh files in the supported original package. Scene scripts are retained as data, not executed by this preview.
+- A native Lua 5.1 library loads all 1,886 compiled scene-script assets after a bounded conversion of their serialized string lengths for Windows x64. Instructions, constants and strings retain their authored values. Native callback and `Wait` scheduling tests cover ordering, error recovery, memory limits and instruction limits. The scene/actor host bindings and in-game event dispatch remain pending, so this does not establish working checkpoints or scripted obstacles. Four source-text scripts are reported separately and are not converted.
 
 The first isolated live run rendered textured CJ in idle, jump and post-run poses, with 1,321 native simulation ticks, 661 GPU frames, movement and a measured jump arc. The rest-pose skinning error was approximately `1.23e-7` model units. This validates the animation arena and asset catalog; it does not establish original course gameplay, matching original physics or a performance comparison.
 
@@ -25,7 +26,7 @@ Offline comparisons replay original USA 1 input masks and raw simulation interva
 
 ## Build the preview
 
-Use the same Windows x64, VS 2022 + ClangCL, Windows SDK, CMake and Python requirements as the main project. Original game assets are converted locally; they are not redistributed. No generator download or original executable translation is needed for this target.
+Use the same Windows x64, VS 2022 + ClangCL, Windows SDK, CMake and Python requirements as the main project. Original game assets are converted locally; they are not redistributed. CMake downloads the hash-pinned official Lua 5.1.5 source and builds it for Windows x64; no original executable translation is needed. See [dependency and license details](../engine/THIRD_PARTY.md).
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/build_engine.ps1
@@ -72,7 +73,9 @@ For a bounded automated run, provide absolute asset and output paths and use `--
 
 `--hidden --verify-player <fresh-output-directory> --level <0-14> --assets <absolute-assets-directory>` tests settlement, acceleration, a held moving jump and landing on that course's starting platform. It saves four GPU captures, a per-tick input/position CSV and a result file, then exits after five seconds. This verifies the starting-platform sequence only.
 
-The five independent CTests include a synthetic player contract. `NativePlayerTests.exe <assets-directory>` additionally checks settlement and a short movement/jump sequence on all 15 authored starting platforms. Its optional `<input.csv> <new-output.csv>` arguments replay a private USA 1 controller trace; the input header is `dt,horizontal,pressed,held`, and the output must not exist. Replays read converted assets and ordinary control values only.
+The six independent CTests include synthetic player and script contracts. `NativePlayerTests.exe <assets-directory>` additionally checks settlement and a short movement/jump sequence on all 15 authored starting platforms. Its optional `<input.csv> <new-output.csv>` arguments replay a private USA 1 controller trace; the input header is `dt,horizontal,pressed,held`, and the output must not exist. Replays read converted assets and ordinary control values only.
+
+`NativeScriptTests.exe <scripts.dnl>` additionally asks the native Lua loader to validate each converted script prototype without executing the game's event scripts. The regular `--check` performs the same validation when a converted script bundle is present. Game event execution waits for native scene bindings; unknown host functions fail explicitly.
 
 ## Work still required for the full game
 

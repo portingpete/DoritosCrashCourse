@@ -14,7 +14,7 @@ DIRECTORIES = {'app', 'runtime', 'renderer', 'engine', 'config', 'tools', 'tests
 FILES = {'.gitignore', '.gitattributes', 'CMakeLists.txt', 'COPYING', 'README.md', 'CHANGELOG.md',
          'Launch.cmd', 'Character Importer.cmd', 'Native Engine Preview.cmd', 'game/.gitkeep'}
 EXTENSIONS = {'.cpp', '.h', '.py', '.ps1', '.toml', '.md', '.txt', '.json', '.patch', '.png', '.cmf',
-              '.yml', '.yaml', '.cmd'}
+              '.yml', '.yaml', '.cmd', '.cmake'}
 SECRETS = [re.compile(pattern.encode()) for pattern in (
     r'gh[pousr]_[A-Za-z0-9]{30,}', r'github_pat_[A-Za-z0-9_]{40,}',
     r'sk-(?:proj-|ant-)[A-Za-z0-9_-]{20,}', r'AKIA[0-9A-Z]{16}',

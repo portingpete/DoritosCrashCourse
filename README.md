@@ -4,7 +4,7 @@ A Windows x64 port of **Doritos Crash Course**, with native keyboard, mouse and 
 
 [Build guide](docs/BUILDING.md) · [Character importer](docs/CHARACTERS.md) · [Credits](docs/CREDITS.md)
 
-An [independent native engine rewrite](docs/NATIVE_ENGINE.md) is being developed alongside the working recompiled port. Its separate Direct3D 11 previews support CJ animation, static inspection of the original 15 course layouts, and basic course movement with static collision. Dynamic obstacles, complete graphics effects, remaining movement actions, audio and game flow are still being rewritten. `Launch.cmd` continues to run the working port.
+An [independent native engine rewrite](docs/NATIVE_ENGINE.md) is being developed alongside the working recompiled port. Its separate Direct3D 11 previews support CJ animation, static inspection of the original 15 course layouts, and basic course movement with static collision. A native Lua component also validates the converted scene scripts; in-game script bindings, dynamic obstacles, complete graphics effects, remaining movement actions, audio and game flow are still being rewritten. `Launch.cmd` continues to run the working port.
 
 ![CJ, the default character](assets/characters/cj/preview.png)
 
@@ -70,6 +70,6 @@ The October 19 map sweep used copied saves and test-only unlocks in isolated run
 
 ## License and credits
 
-Port source and generator patches: **GPL-3.0**, see [COPYING](COPYING). CJ model: **CC BY 4.0**, by derry@pennywise (`abhishekambily`), fitted and converted for this project; see [model attribution](assets/characters/cj/LICENSE.txt). Kenney input prompts: **CC0**. The preview depicts the converted CJ model.
+Port source and generator patches: **GPL-3.0**, see [COPYING](COPYING). CJ model: **CC BY 4.0**, by derry@pennywise (`abhishekambily`), fitted and converted for this project; see [model attribution](assets/characters/cj/LICENSE.txt). Kenney input prompts: **CC0**. Native Lua: **MIT**, see [dependency details](engine/THIRD_PARTY.md). The preview depicts the converted CJ model.
 
 Original game and character names belong to their respective owners. This is an independent fan project. Developed with assistance from OpenAI Codex; live game testing used Luna Max agents. See [full credits and provenance](docs/CREDITS.md).

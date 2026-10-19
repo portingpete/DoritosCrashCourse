@@ -14,6 +14,7 @@ from engine_assets import AssetError, read_animation, read_scene
 from inspect_pak import read_directory, read_entry, _no_links
 from engine_world import prepare_world
 from engine_gameplay import movement_data
+from engine_scripts import prepare_scripts
 
 
 def prepare(pak: Path, output: Path, character='cj'):
@@ -86,6 +87,7 @@ def prepare(pak: Path, output: Path, character='cj'):
     _no_links(target)
     target.write_bytes(binary)
     world = prepare_world(source, scenes, catalog, output)
+    scripts = prepare_scripts(scenes, output)
     manifest = {'schema': 1, 'engine': 'independent-native', 'character': pack.metadata['name'],
                 'source_package_sha256': hashlib.sha256(pak.read_bytes()).hexdigest(),
                 'pack_sha256': pack.fingerprint, 'asset_sha256': digest(binary),
@@ -96,6 +98,7 @@ def prepare(pak: Path, output: Path, character='cj'):
                 'movement_sha256': digest(movement_binary),
                 'runtime_uses_xex': False, 'runtime_uses_guest_memory': False,
                 'world': world,
+                'scripts': scripts,
                 'scope': 'Native character animation, static geometry and basic course movement; remaining actions, dynamic actors and full gameplay pending'}
     for name in ('manifest.json', 'source-scenes.json'):
         _no_links(output / name)

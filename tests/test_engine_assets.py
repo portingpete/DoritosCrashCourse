@@ -8,6 +8,7 @@ from engine_assets import AssetError,read_animation,read_scene,read_static_mesh,
 from engine_world import transform,matrix_product
 from engine_gameplay import movement_data,MOVEMENT_FIELDS,ANIMATION_FIELDS,PLAYER_FIELDS,CURVE_FIELDS
 from engine_assets import SceneRecord
+from engine_scripts import convert_chunk,LUA32_HEADER,LUA64_HEADER
 
 
 def string(text):
@@ -40,6 +41,23 @@ def collision_mesh():
 
 
 class EngineAssetsTests(unittest.TestCase):
+    def test_native_script_string_width_conversion_and_bounds(self):
+        # Independently authored Lua 5.1 prototype: return a string constant.
+        text=b'native-test\0';constant=b'checkpoint\0'
+        function=(struct.pack('<I',len(text))+text+struct.pack('<II4B',0,0,0,0,2,2)+
+                  struct.pack('<I2I',2,1,0x0100001e)+struct.pack('<IBI',1,4,len(constant))+constant+
+                  struct.pack('<4I',0,0,0,0))
+        original=LUA32_HEADER+function
+        expected=(LUA64_HEADER+struct.pack('<Q',len(text))+text+function[4+len(text):])
+        offset=12+8+len(text)+12+12+5
+        expected=expected[:offset]+struct.pack('<Q',len(constant))+expected[offset+4:]
+        self.assertEqual(convert_chunk(original),expected)
+        self.assertEqual(convert_chunk(original+b'\0'),expected)
+        for size in range(len(original)):
+            with self.assertRaises(AssetError):convert_chunk(original[:size])
+        for bad in (original+b'x',LUA64_HEADER+function,original[:24]+b'\xff'*4+original[28:]):
+            with self.assertRaises(AssetError):convert_chunk(bad)
+
     def test_movement_template_order_and_bounded_export(self):
         game={k:[1.] for k in MOVEMENT_FIELDS+PLAYER_FIELDS};game['Gravity']=[-20.]
         game['JumpGravityFactor']=[-.5];game['JumpAnimTimeFactor']=[.7]
@@ -131,15 +149,26 @@ class EngineAssetsTests(unittest.TestCase):
     def test_all_original_scene_and_animation_assets_parse_exactly(self):
         from inspect_pak import read_directory,read_entry
         counts={'.wbm':0,'.wbr':0,'.caf':0,'.rvm':0,'.wco':0}
+        script_count=0
         for entry in read_directory(ROOT/'game/data.pak'):
             suffix=Path(entry.name).suffix
             if suffix not in counts: continue
             with self.subTest(asset=entry.name):
                 data=read_entry(ROOT/'game/data.pak',entry)
                 readers={'.caf':lambda d:read_animation(d,256),'.rvm':read_static_mesh,'.wco':read_collision_mesh}
-                readers.get(suffix,read_scene)(data)
+                parsed=readers.get(suffix,read_scene)(data)
+                if suffix in ('.wbm','.wbr'):
+                    import base64
+                    for record in parsed:
+                        for values in record.values.values():
+                            for value in values:
+                                if isinstance(value,dict) and value.get('mode')==2:
+                                    converted=convert_chunk(base64.b64decode(value['blob'],validate=True))
+                                    self.assertEqual(converted[:12],LUA64_HEADER)
+                                    script_count+=1
             counts[suffix]+=1
         self.assertEqual(counts,{'.wbm':183,'.wbr':56,'.caf':106,'.rvm':153,'.wco':36})
+        self.assertEqual(script_count,1886)
 
 
 if __name__=='__main__': unittest.main()

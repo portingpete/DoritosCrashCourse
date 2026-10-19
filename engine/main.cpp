@@ -3,6 +3,7 @@
 #include "collision.h"
 #include "locomotion.h"
 #include "player.h"
+#include "scripts.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -292,6 +293,11 @@ int wmain(int argc,wchar_t** argv) {
         auto option=options(argc,argv); localPath(option.assets/L"character.dne"); auto model=loadModel(option.assets/L"character.dne");
         std::cout<<"[INDEPENDENT ENGINE] bones="<<model.bones.size()<<" courses="<<model.courses.size()<<" clips="<<model.clips.size()<<" no_xex=1 no_guest_memory=1\n";
         if(option.check) {
+            if(std::filesystem::exists(option.assets/L"scripts.dnl")) {
+                localPath(option.assets/L"scripts.dnl");auto chunks=loadScripts(option.assets/L"scripts.dnl");ScriptVm vm;
+                for(auto& chunk:chunks)vm.validate(chunk.code,chunk.source+":"+chunk.actor+":"+chunk.field);
+                std::cout<<"[NATIVE SCRIPT CHECK] compiled_chunks="<<chunks.size()<<" native_lua=1 scene_bindings_pending=1\n";
+            }
             float worst=0; auto pose=samplePose(model,nullptr,0);
             for(auto& mesh:model.meshes) { auto vertices=skin(mesh,pose); for(size_t i=0;i<vertices.size();++i) { auto a=XMLoadFloat3(&vertices[i].position),b=XMLoadFloat3(&mesh.vertices[i].position); worst=std::max(worst,XMVectorGetX(XMVector3Length(XMVectorSubtract(a,b)))); } }
             if(worst>.002f || model.courses.size()!=15)throw std::runtime_error("Native rest pose/course check failed");
