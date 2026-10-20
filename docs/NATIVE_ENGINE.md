@@ -8,7 +8,7 @@ The rewrite replaces the recompiled engine with ordinary PC data structures and 
 
 - A separate CMake build route returns before configuring the AOT toolchain or its dependencies.
 - Native little-endian asset bundle with bounded counts, native indices, transforms and strings.
-- Native skeleton hierarchy, inverse-bind transforms, quaternion interpolation, looping, one-shot sampling, local pose blending and CPU skinning. Authored root-motion curves retain their nonuniform key times and accumulate correctly across animation loops.
+- Native skeleton hierarchy, inverse-bind transforms, quaternion interpolation, looping, one-shot sampling, local pose blending and CPU skinning. Authored root-motion curves retain their nonuniform key times and accumulate correctly across animation loops. A separate character heading maps the model's forward -Y axis to course +/-X travel, including imported packs; analytic tests check both directions and retained arena heading after input release.
 - Direct3D 11 device/resources, project-authored shaders and WIC image loading.
 - Direct Windows keyboard/controller input and a fixed-step native movement/jump diagnostic arena.
 - Original 15-course catalog and chunk references converted from the player's package.

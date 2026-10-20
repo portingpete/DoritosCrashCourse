@@ -39,10 +39,11 @@ std::vector<XMFLOAT4X4> samplePose(const Model& model, const Clip* clip, float s
 std::vector<XMFLOAT4X4> blendPose(const Model& model,const Clip* first,float firstTime,const Clip* second,float secondTime,float weight,bool loop=true);
 XMFLOAT3 rootMotionDelta(const Clip& clip,double firstTime,double secondTime,bool loop=true);
 std::vector<DrawVertex> skin(const Mesh& mesh, const std::vector<XMFLOAT4X4>& pose);
+XMFLOAT4X4 characterWorld(XMFLOAT3 position,float facing);
 struct Input { float horizontal = 0; bool jump = false; };
 struct Player {
     XMFLOAT3 position{}, velocity{};
-    float clock = 0, animationTime = 0;
+    float clock = 0, animationTime = 0, facing=1;
     bool grounded = true;
     std::string animation = "idle";
     void tick(const Input& input, float seconds);

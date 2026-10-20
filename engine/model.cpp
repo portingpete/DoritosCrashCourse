@@ -168,11 +168,21 @@ std::vector<DrawVertex> skin(const Mesh& mesh,const std::vector<XMFLOAT4X4>& pos
     return result;
 }
 
+XMFLOAT4X4 characterWorld(XMFLOAT3 position,float facing) {
+    need(std::isfinite(position.x)&&std::isfinite(position.y)&&std::isfinite(position.z)&&
+         std::isfinite(facing)&&facing!=0,"Invalid native character heading");
+    // Authored Cal3D movement is forward along model -Y. Course travel is
+    // world +/-X, so its visual heading is +/-90 degrees about native Z.
+    XMFLOAT4X4 result;
+    XMStoreFloat4x4(&result,XMMatrixRotationZ(facing>0?XM_PIDIV2:-XM_PIDIV2)*XMMatrixTranslation(position.x,position.y,position.z));
+    return result;
+}
 void Player::tick(const Input& input,float seconds) {
     need(std::isfinite(seconds) && seconds>0 && seconds<=.05f && std::isfinite(input.horizontal),"Invalid native simulation step");
     // Animation-lab floor only. Original obstacle/course physics are separate
     // rewrite work and must not be certified from this diagnostic arena.
     clock+=seconds; velocity.x=std::clamp(input.horizontal,-1.f,1.f)*3.f;
+    if(velocity.x!=0)facing=velocity.x>0?1.f:-1.f;
     if(input.jump && grounded) { velocity.z=5.5f; grounded=false; }
     if(!grounded)velocity.z-=14.f*seconds;
     position.x+=velocity.x*seconds; position.z+=velocity.z*seconds;

@@ -291,8 +291,8 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
             check(context->Map(meshes[i].vertices.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped),"Cannot update native skinned geometry");
             memcpy(mapped.pData,vertices.data(),vertices.size()*sizeof(DrawVertex)); context->Unmap(meshes[i].vertices.Get(),0);
             auto origin=actor?actor->position:world?world->courses[course].spawn:player.position;
-            auto rotation=actor&&actor->facing<0?XMMatrixRotationZ(XM_PI):XMMatrixIdentity();
-            draw(meshes[i],rotation*XMMatrixTranslation(origin.x,origin.y,origin.z),viewProjection);
+            auto transform=characterWorld(origin,actor?actor->facing:player.facing);
+            draw(meshes[i],XMLoadFloat4x4(&transform),viewProjection);
         }
         context->OMSetRenderTargets(0,nullptr,nullptr);
         ComPtr<IDXGISurface1> surface; check(swapchain->GetBuffer(0,IID_PPV_ARGS(&surface)),"Cannot access native HUD surface");

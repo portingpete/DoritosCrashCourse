@@ -55,6 +55,17 @@ int main() {
         model.bones[0].parent=1; rejects([&]{samplePose(model,nullptr,0);}); model.bones[0].parent=-1;
         rejects([&]{samplePose(model,nullptr,std::numeric_limits<float>::quiet_NaN());});
         mesh.vertices[0].bones[0]=9; rejects([&]{skin(mesh,samplePose(model,nullptr,0));});
+        for(float facing:{-1.f,1.f}) {
+            using namespace DirectX;
+            auto world=characterWorld({2,3,4},facing);auto matrix=XMLoadFloat4x4(&world);XMFLOAT3 forward,origin;
+            XMStoreFloat3(&forward,XMVector3TransformNormal(XMVectorSet(0,-1,0,0),matrix));
+            XMStoreFloat3(&origin,XMVector3TransformCoord(XMVectorZero(),matrix));
+            expect(near(forward.x,facing)&&near(forward.y,0)&&near(forward.z,0)&&near(origin.x,2)&&near(origin.y,3)&&near(origin.z,4),
+                   "Cal3D forward heading differs from course travel direction or actor position");
+        }
+        rejects([&]{characterWorld({},0);});
+        Player facingPlayer;facingPlayer.tick({-1,false},.01f);facingPlayer.tick({},.01f);
+        expect(facingPlayer.facing==-1,"Native arena lost its last heading after releasing input");
         Player player; float maximum=0;
         for(int i=0;i<1200;++i) { player.tick({i<600?1.f:0.f,i==120},1.f/120); maximum=std::max(maximum,player.position.z); }
         expect(near(player.position.x,15)&&player.grounded&&player.animation=="idle"&&maximum>.9f,"Native fixed-step movement/jump arena failed");
