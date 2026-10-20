@@ -22,6 +22,23 @@ const EnvironmentStage& Environment::stageForCourse(uint32_t id) const {
     need(id<courseStages.size()&&courseStages[id]<stages.size(),"Native environment has no course stage");
     return stages[courseStages[id]];
 }
+EnvironmentView environmentView(const EnvironmentStage& stage,XMFLOAT3 focus) {
+    using namespace DirectX;
+    const auto& camera=stage.camera;
+    for(float v:{focus.x,focus.y,focus.z,camera.lookAt.x,camera.lookAt.y,camera.lookAt.z,camera.distance,camera.pitch,camera.yaw,stage.startFov})
+        need(std::isfinite(v),"Nonfinite native camera input");
+    need(camera.distance>0&&stage.startFov>=1&&stage.startFov<=179,"Invalid native camera placement");
+    float pitch=XMConvertToRadians(camera.pitch),yaw=XMConvertToRadians(camera.yaw);
+    need(std::abs(std::sin(pitch))>1e-5f,"Native camera orbit is parallel to its up vector");
+    auto target=XMVectorAdd(XMLoadFloat3(&focus),XMLoadFloat3(&camera.lookAt));
+    auto offset=XMVectorSet(camera.distance*std::sin(pitch)*std::sin(yaw),camera.distance*std::sin(pitch)*std::cos(yaw),camera.distance*std::cos(pitch),0);
+    EnvironmentView result;
+    // Swapping source Y/Z changes handedness. RH view/projection preserve
+    // source +X as screen-right instead of mirroring the entire course.
+    XMStoreFloat4x4(&result.view,XMMatrixLookAtRH(XMVectorAdd(target,offset),target,XMVectorSet(0,0,1,0)));
+    result.verticalFov=2*std::atan(.75f*std::tan(XMConvertToRadians(stage.startFov)*.5f));
+    return result;
+}
 Environment loadEnvironment(const std::filesystem::path& path) {
     AssetReader input(path);Environment environment;
     need(input.read<uint32_t>()==0x31564e44&&input.read<uint32_t>()==1,"Unsupported native environment asset");

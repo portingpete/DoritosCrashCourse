@@ -274,18 +274,12 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
         context->VSSetShader(vertexShader.Get(),nullptr,0); context->PSSetShader(pixelShader.Get(),nullptr,0);
         context->VSSetConstantBuffers(0,1,constants.GetAddressOf()); context->PSSetSamplers(0,1,sampler.GetAddressOf());
         context->PSSetConstantBuffers(0,1,constants.GetAddressOf());context->OMSetBlendState(blend.Get(),nullptr,0xffffffff);
-        auto view=world ? XMMatrixLookAtLH(XMVectorSet(focus.x+3,-17,focus.z+6,1),XMVectorSet(focus.x,0,focus.z+1,1),XMVectorSet(0,0,1,0)) : XMMatrixLookAtLH(XMVectorSet(player.position.x+3,-5,2.3f,1),XMVectorSet(player.position.x,0,1,1),XMVectorSet(0,0,1,0));
+        auto view=world ? XMMatrixLookAtRH(XMVectorSet(focus.x+3,-17,focus.z+6,1),XMVectorSet(focus.x,0,focus.z+1,1),XMVectorSet(0,0,1,0)) : XMMatrixLookAtRH(XMVectorSet(player.position.x+3,-5,2.3f,1),XMVectorSet(player.position.x,0,1,1),XMVectorSet(0,0,1,0));
         float fov=XM_PIDIV4;
         if(world&&stage) {
-            const auto& camera=stage->camera;float pitch=XMConvertToRadians(camera.pitch),yaw=XMConvertToRadians(camera.yaw);
-            auto target=XMVectorAdd(XMLoadFloat3(&focus),XMLoadFloat3(&camera.lookAt));
-            auto offset=XMVectorSet(camera.distance*std::sin(pitch)*std::sin(yaw),camera.distance*std::sin(pitch)*std::cos(yaw),camera.distance*std::cos(pitch),0);
-            view=XMMatrixLookAtLH(XMVectorAdd(target,offset),target,XMVectorSet(0,0,1,0));
-            // Stage StartFov is horizontal at 4:3; the original camera keeps
-            // the resulting vertical angle when the output aspect changes.
-            fov=2*std::atan(.75f*std::tan(XMConvertToRadians(stage->startFov)*.5f));
+            auto camera=environmentView(*stage,focus);view=XMLoadFloat4x4(&camera.view);fov=camera.verticalFov;
         }
-        auto projection=XMMatrixPerspectiveFovLH(fov,1280.f/720,.05f,250.f), viewProjection=view*projection;
+        auto projection=XMMatrixPerspectiveFovRH(fov,1280.f/720,.05f,250.f), viewProjection=view*projection;
         if(world) {
             if(environment)drawWorld(*environment,environmentGeometry,course,viewProjection,focus,false);
             drawWorld(*world,courseGeometry,course,viewProjection,focus,true);

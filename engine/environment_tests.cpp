@@ -78,6 +78,27 @@ template<class Action> void rejects(Action action,const char* message) {
     bool failed=false;try { action(); }catch(const std::runtime_error&) { failed=true; }
     expect(failed,message);
 }
+void cameraProjection() {
+    using namespace DirectX;
+    EnvironmentStage stage;stage.startFov=70;stage.camera.distance=8;stage.camera.pitch=70;stage.camera.yaw=195;
+    stage.camera.lookAt={2.5f,0,.5f};XMFLOAT3 focus{11,0,3};
+    auto camera=environmentView(stage,focus);float degrees=XMConvertToDegrees(camera.verticalFov);
+    expect(std::abs(degrees-55.4129f)<.001f,"Stage horizontal 4:3 FOV was not converted to vertical FOV");
+    auto view=XMLoadFloat4x4(&camera.view),projection=XMMatrixPerspectiveFovRH(camera.verticalFov,16.f/9,.05f,250.f);
+    auto target=XMVectorAdd(XMLoadFloat3(&focus),XMLoadFloat3(&stage.camera.lookAt));
+    XMFLOAT3 center,right,up;
+    XMStoreFloat3(&center,XMVector3TransformCoord(target,view*projection));
+    XMStoreFloat3(&right,XMVector3TransformCoord(XMVectorAdd(target,XMVectorSet(1,0,0,0)),view*projection));
+    XMStoreFloat3(&up,XMVector3TransformCoord(XMVectorAdd(target,XMVectorSet(0,0,1,0)),view*projection));
+    expect(std::abs(center.x)<1e-5f&&std::abs(center.y)<1e-5f&&center.z>0&&center.z<1,"Camera look target is outside its projection center/depth");
+    expect(right.x>center.x&&up.y>center.y,"Native source-basis conversion mirrored course direction or vertical orientation");
+    auto narrow=XMMatrixPerspectiveFovRH(camera.verticalFov,4.f/3,.05f,250.f);
+    XMFLOAT3 narrowUp;XMStoreFloat3(&narrowUp,XMVector3TransformCoord(XMVectorAdd(target,XMVectorSet(0,0,1,0)),view*narrow));
+    expect(closeFloat(narrowUp.y,up.y),"Output aspect changed authored vertical camera framing");
+    stage.camera.pitch=0;rejects([&]{environmentView(stage,focus);},"Camera accepted an orbit parallel to its up vector");
+    stage.camera.pitch=70;focus.x=std::numeric_limits<float>::quiet_NaN();
+    rejects([&]{environmentView(stage,focus);},"Camera accepted a nonfinite focus");
+}
 }
 int main() {
     auto path=std::filesystem::temp_directory_path()/(L"doritos-environment-contract-"+
@@ -95,6 +116,7 @@ int main() {
     };
     auto reject=[&](const Fixture& fixture,const char* message) { rejects([&]{load(fixture);},message); };
     try {
+        cameraProjection();
         auto environment=load(Fixture{});
         expect(environment.stages.size()==3,"Native environment lost a stage");
         constexpr uint32_t themes[]={2,0,1};

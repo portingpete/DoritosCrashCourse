@@ -38,4 +38,6 @@ struct Environment {
 // Geometry is intentionally loaded separately with loadWorld from the adjacent
 // environment-world.dnw, so the same GPU/static-mesh renderer can consume it.
 Environment loadEnvironment(const std::filesystem::path& path);
+struct EnvironmentView { XMFLOAT4X4 view{};float verticalFov=0; };
+EnvironmentView environmentView(const EnvironmentStage& stage,XMFLOAT3 focus);
 }
