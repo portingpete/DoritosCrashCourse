@@ -1,0 +1,184 @@
+from pathlib import Path
+import struct
+import sys
+import unittest
+ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'tools'))
+from engine_assets import AssetError,read_animation,read_scene,read_static_mesh,read_collision_mesh
+from engine_world import transform,matrix_product
+from engine_gameplay import movement_data,MOVEMENT_FIELDS,ANIMATION_FIELDS,PLAYER_FIELDS,CURVE_FIELDS
+from engine_assets import SceneRecord
+from engine_scripts import convert_chunk,LUA32_HEADER,LUA64_HEADER
+
+
+def string(text):
+    data=text.encode(); return struct.pack('<I',len(data))+data
+
+
+def scene():
+    return (struct.pack('<3H',2,1,5)+string('ACTOR')+struct.pack('<2H',1,2)+
+            string('Pos')+bytes([9])+string('Name')+bytes([6])+struct.pack('<2H',1,5)+string('instance')+
+            b'1'+struct.pack('<H3f',1,1,2,3)+b'1'+struct.pack('<H',1)+string('Native actor')+b'_bin\0')
+
+
+def animation(flags=0):
+    extension=struct.pack('<I8f',2,0,1,2,3,1,1,4,3) if flags==2 else b''
+    return (b'CAF\0'+struct.pack('<2I',1010,flags)+extension+struct.pack('<fIII',1,1,0,2)+
+            struct.pack('<8f',0,0,0,0,0,0,0,1)+struct.pack('<8f',1,1,0,0,0,0,0,1))
+
+
+def static_mesh():
+    header=struct.pack('<BIBHH5BI',102,2,1,3,1,0,0,1,0,0,0)+bytes(196)
+    vertices=b''.join(struct.pack('<8f',*p,0,0,1,0,0) for p in ((0,0,0),(1,0,0),(0,1,0)))
+    return header+b'native/material\0'.ljust(32,b'\0')+vertices+struct.pack('<5H',0,1,2,0,0)
+
+
+def collision_mesh():
+    header=struct.pack('<2B3H2BH',101,0,3,1,3,0,0,32)
+    points=struct.pack('<9f',0,0,0,1,0,0,0,1,0)
+    node=struct.pack('<HHB7f3H',1,3,0,0,0,0,0,1,1,0,0,1,2)
+    return header+points+node
+
+
+class EngineAssetsTests(unittest.TestCase):
+    def test_native_script_string_width_conversion_and_bounds(self):
+        # Independently authored Lua 5.1 prototype: return a string constant.
+        text=b'native-test\0';constant=b'checkpoint\0'
+        function=(struct.pack('<I',len(text))+text+struct.pack('<II4B',0,0,0,0,2,2)+
+                  struct.pack('<I2I',2,1,0x0100001e)+struct.pack('<IBI',1,4,len(constant))+constant+
+                  struct.pack('<4I',0,0,0,0))
+        original=LUA32_HEADER+function
+        expected=(LUA64_HEADER+struct.pack('<Q',len(text))+text+function[4+len(text):])
+        offset=12+8+len(text)+12+12+5
+        expected=expected[:offset]+struct.pack('<Q',len(constant))+expected[offset+4:]
+        self.assertEqual(convert_chunk(original),expected)
+        self.assertEqual(convert_chunk(original+b'\0'),expected)
+        for size in range(len(original)):
+            with self.assertRaises(AssetError):convert_chunk(original[:size])
+        for bad in (original+b'x',LUA64_HEADER+function,original[:24]+b'\xff'*4+original[28:]):
+            with self.assertRaises(AssetError):convert_chunk(bad)
+
+    def test_movement_template_order_and_bounded_export(self):
+        game={k:[1.] for k in MOVEMENT_FIELDS+PLAYER_FIELDS};game['Gravity']=[-20.]
+        game['JumpGravityFactor']=[-.5];game['JumpAnimTimeFactor']=[.7]
+        for k in CURVE_FIELDS:game[k]=[[0,1]]
+        animation={k:[1.] for k in ANIMATION_FIELDS};animation['AnimSpeedChangePortion']=[.4]
+        animation.update({k:[v] for k,v in {'Idle':'IDLE','Sprint':'BOOST','Jump':'JUMP',
+                         'FallIdle':'FALL','EasyLanding':'LAND','HardLanding':'HARD',
+                         'StartUpUsaIdle':'START_US','StartUpEuropeIdle':'START_EU','StartUpJapanIdle':'START_JP'}.items()})
+        animation['MovementAnim']=['FAST','SLOW']
+        scenes={'data/templates/gameconfig.wbr':[SceneRecord('GAMECONFIGMASTER','default',game)],
+                'data/templates/animation.wbr':[SceneRecord('ANIMATIONMASTER','default',animation)],
+                'data/templates/fighter.wbr':[SceneRecord('FIGHTERMASTER','player/gamepad0',{
+                    'FeetCollider':['feet'],'FeetColliderBone':[''],'FeetColliderPos':[[0,2,0]],'FeetColliderScale':[[1,1,1]]})],
+                'data/templates/cprimitive3.wbr':[SceneRecord('CPRIMITIVE3MASTER','feet',{
+                    'PrimitiveType':[1],'BoundingBoxMin':[[-.5,-.5,-.5]],'BoundingBoxMax':[[.5,.5,.5]]})]}
+        settings,clips,binary=movement_data(scenes)
+        self.assertEqual((clips['run'],clips['run_fast']),('SLOW','FAST'))
+        self.assertEqual(binary[:12],b'DNP1'+struct.pack('<II',2,34))
+        self.assertEqual(struct.unpack('<34f',binary[12:])[8],-20.)
+        self.assertEqual(settings['FeetOffset'],[0,0,2])
+        for invalid in (float('nan'),0,-1):
+            game['RunInertiaTime']=[invalid]
+            with self.assertRaises(AssetError):movement_data(scenes)
+    def test_collision_triangle_tree_and_truncation(self):
+        data=collision_mesh();mesh=read_collision_mesh(data)
+        self.assertEqual(mesh['indices'],[0,1,2]);self.assertEqual(len(mesh['nodes']),1)
+        for size in range(len(data)):
+            with self.assertRaises(AssetError):read_collision_mesh(data[:size])
+        for offset,fmt,value in ((0,'B',102),(4,'H',2),(6,'H',4),(len(data)-2,'H',3)):
+            bad=bytearray(data);struct.pack_into('<'+fmt,bad,offset,value)
+            with self.assertRaises(AssetError):read_collision_mesh(bytes(bad))
+        with self.assertRaises(AssetError):read_collision_mesh(data+b'x')
+    def test_static_geometry_axes_material_ranges_and_bounds(self):
+        data=static_mesh();mesh=read_static_mesh(data)
+        self.assertEqual(mesh['vertices'][2][:6],[0,0,1,0,1,0])
+        self.assertEqual(mesh['groups'],[{'material':'native/material','slot':0,'first':0,'count':3}])
+        for size in range(len(data)):
+            with self.assertRaises(AssetError):read_static_mesh(data[:size])
+        for offset,fmt,value in ((0,'B',103),(1,'I',8),(len(data)-10,'H',3),(247,'f',float('nan'))):
+            broken=bytearray(data);struct.pack_into('<'+fmt,broken,offset,value)
+            with self.assertRaises(AssetError):read_static_mesh(bytes(broken))
+        with self.assertRaises(AssetError):read_static_mesh(data+b'x')
+
+    def test_static_authored_degenerate_normals_are_rebuilt(self):
+        data=bytearray(static_mesh());struct.pack_into('<3f',data,259,*([float('nan')]*3))
+        mesh=read_static_mesh(bytes(data))
+        self.assertEqual(mesh['repairs'],{'normals':1,'uv':0})
+        self.assertEqual(mesh['vertices'][0][3:6],[0,-1,0])
+        struct.pack_into('<2H',data,len(data)-4,0,65535)
+        self.assertEqual(read_static_mesh(bytes(data))['groups'],[])
+
+    def test_scene_resource_scale_rotation_and_translation_composition(self):
+        local=transform((2,0,0),(0,0,90),(2,1,1))
+        actor=transform((10,20,30))
+        world=matrix_product(actor,local)
+        point=[sum(world[i][j]*v for j,v in enumerate((1,0,0,1))) for i in range(4)]
+        for a,b in zip(point,(12,22,30,1)):self.assertAlmostEqual(a,b)
+
+    def test_scene_angles_are_yaw_pitch_roll_in_original_component_order(self):
+        def point(matrix,value):return [sum(matrix[i][j]*v for j,v in enumerate(value+[1])) for i in range(3)]
+        yaw=transform((4,-2,0),(180,0,0))
+        result=point(yaw,[2,.5,0])
+        for a,b in zip(result,(2,-1.5,0)):self.assertAlmostEqual(a,b)
+        # Noncommuting axes distinguish the original yaw/pitch/roll order.
+        result=point(transform(angles=(90,90,90)),[1,0,0])
+        for a,b in zip(result,(-1,0,0)):self.assertAlmostEqual(a,b)
+
+    def test_scene_values_have_no_addresses_or_execution_context(self):
+        record=read_scene(scene())[0]
+        self.assertEqual((record.type,record.name),('ACTOR','instance'))
+        self.assertEqual(record.values,{'Pos':[[1,2,3]],'Name':['Native actor']})
+
+    def test_scene_truncation_and_trailing_bytes_rejected(self):
+        data=scene()
+        for size in range(len(data)):
+            with self.assertRaises(AssetError): read_scene(data[:size])
+        with self.assertRaises(AssetError): read_scene(data+b'x')
+
+    def test_animation_track_and_motion_extension(self):
+        for flags in (0,2):
+            clip=read_animation(animation(flags),1)
+            self.assertEqual(clip['duration'],1)
+            self.assertEqual(clip['tracks'][0]['keys'][-1],[1,1,0,0,0,0,0,1])
+            self.assertEqual(clip['motion'],[[0,1,2,3],[1,1,4,3]] if flags else [])
+        for time in (-1,0,.5):
+            bad=bytearray(animation(2));struct.pack_into('<f',bad,32,time)
+            with self.assertRaises(AssetError):read_animation(bytes(bad),1)
+
+    def test_animation_bones_times_quaternions_and_truncation_rejected(self):
+        data=animation()
+        for size in range(len(data)):
+            with self.assertRaises(AssetError): read_animation(data[:size],1)
+        for offset,fmt,value in ((8,'I',1),(20,'I',2),(60,'f',-1),(56,'f',2)):
+            corrupt=bytearray(data); struct.pack_into('<'+fmt,corrupt,offset,value)
+            with self.assertRaises(AssetError): read_animation(bytes(corrupt),1)
+        with self.assertRaises(AssetError): read_animation(data+b'x',1)
+
+    @unittest.skipUnless((ROOT/'game/data.pak').is_file(),'Private original package not present')
+    def test_all_original_scene_and_animation_assets_parse_exactly(self):
+        from inspect_pak import read_directory,read_entry
+        counts={'.wbm':0,'.wbr':0,'.caf':0,'.rvm':0,'.wco':0}
+        script_count=0
+        for entry in read_directory(ROOT/'game/data.pak'):
+            suffix=Path(entry.name).suffix
+            if suffix not in counts: continue
+            with self.subTest(asset=entry.name):
+                data=read_entry(ROOT/'game/data.pak',entry)
+                readers={'.caf':lambda d:read_animation(d,256),'.rvm':read_static_mesh,'.wco':read_collision_mesh}
+                parsed=readers.get(suffix,read_scene)(data)
+                if suffix in ('.wbm','.wbr'):
+                    import base64
+                    for record in parsed:
+                        for values in record.values.values():
+                            for value in values:
+                                if isinstance(value,dict) and value.get('mode')==2:
+                                    converted=convert_chunk(base64.b64decode(value['blob'],validate=True))
+                                    self.assertEqual(converted[:12],LUA64_HEADER)
+                                    script_count+=1
+            counts[suffix]+=1
+        self.assertEqual(counts,{'.wbm':183,'.wbr':56,'.caf':106,'.rvm':153,'.wco':36})
+        self.assertEqual(script_count,1886)
+
+
+if __name__=='__main__': unittest.main()

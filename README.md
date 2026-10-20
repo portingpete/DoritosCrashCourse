@@ -4,6 +4,8 @@ A Windows x64 port of **Doritos Crash Course**, with native keyboard, mouse and 
 
 [Build guide](docs/BUILDING.md) · [Character importer](docs/CHARACTERS.md) · [Credits](docs/CREDITS.md)
 
+An [independent native engine rewrite](docs/NATIVE_ENGINE.md) is being developed alongside the working recompiled port. Its separate Direct3D 11 previews support CJ animation, course/environment rendering, basic movement, stationary conveyor motors, a skeletal square-hammer preview and a partial native trigger/checkpoint session. Converted static collision retains owning platform identity; selected conveyor textures scroll on a persistent unscaled effect clock. Obstacle interactions, actor-group activation, complete graphics effects, remaining movement actions, audio and game flow are still being rewritten. `Launch.cmd` continues to run the working port.
+
 ![CJ, the default character](assets/characters/cj/preview.png)
 
 ## What works
@@ -66,8 +68,20 @@ py -3 tools/audit_public_source.py --pak game/data.pak
 
 The October 19 map sweep used copied saves and test-only unlocks in isolated runs. It covered loading plus brief gameplay on all 15 maps and repeated main-menu returns. Importer verification covers conversion, pack validation, local selection, default CJ and imported characters in USA 1. These checks preserve the user's originals, normal progression and normal character overlay. Private test logs, captures and original data are excluded from the repository.
 
+The independent rewrite has a separate 15-contract CPU/source suite. After building and converting its assets, additional bounded checks are available:
+
+```powershell
+& 'build_native/engine/engine/Release/NativePlatformTests.exe' '<absolute-assets-directory>'
+& 'build_native/engine/engine/Release/NativeConveyorTests.exe' '<absolute-assets-directory>'
+& 'build_native/engine/engine/Release/NativeActorTests.exe' '<absolute-assets-directory>'
+& 'build_native/engine/engine/Release/DoritosNativeEngine.exe' --hidden --verify-conveyors '<absolute-fresh-evidence-directory>' --assets '<absolute-assets-directory>'
+& 'build_native/engine/engine/Release/DoritosNativeEngine.exe' --hidden --verify-actors '<another-absolute-fresh-directory>' --assets '<absolute-assets-directory>'
+```
+
+Replace the quoted paths; each evidence directory must be new. The conveyor command probes four belts in the first USA section and records fixed-pose UV pairs. The actor command captures an authored square hammer through resume, pause, reset and a held final pose; it does not test player impacts or actor-group activation. Synthetic tests cover one-shot air carry, strict jump queues and an ordinary landing delay. An original-runtime conveyor comparison has not been collected. Starting-platform checks and the working port's map sweep do not establish full native gameplay parity. See the [native engine scope and commands](docs/NATIVE_ENGINE.md) for remaining work.
+
 ## License and credits
 
-Port source and generator patches: **GPL-3.0**, see [COPYING](COPYING). CJ model: **CC BY 4.0**, by derry@pennywise (`abhishekambily`), fitted and converted for this project; see [model attribution](assets/characters/cj/LICENSE.txt). Kenney input prompts: **CC0**. The preview depicts the converted CJ model.
+Port source and generator patches: **GPL-3.0**, see [COPYING](COPYING). CJ model: **CC BY 4.0**, by derry@pennywise (`abhishekambily`), fitted and converted for this project; see [model attribution](assets/characters/cj/LICENSE.txt). Kenney input prompts: **CC0**. Native Lua: **MIT**, see [dependency details](engine/THIRD_PARTY.md). The preview depicts the converted CJ model.
 
 Original game and character names belong to their respective owners. This is an independent fan project. Developed with assistance from OpenAI Codex; live game testing used Luna Max agents. See [full credits and provenance](docs/CREDITS.md).
