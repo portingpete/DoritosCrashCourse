@@ -120,6 +120,70 @@ void countersCooldownAndUnsupported() {
     authored.records.erase(authored.records.begin());CourseSession noStart(authored,scripts,0);
     check(!noStart.lastCheckpoint()&&!noStart.requestRespawn(),"Session guessed an initial Mode1 checkpoint");
 }
+void ownedDelayCleanupAndActorLookup() {
+    auto model=testModel();CoursePlayer player(model,testSettings());auto authored=scene();
+    std::vector<ScriptChunk> scripts={source("function Unused() end"),
+        source("me.collided.SetLastCheckPoint(false); Log('first-wait'); Wait(1); Log('first-stale')","first"),
+        source("Log('second-wait'); WaitFrames(3); Log('second-live')","second"),
+        source("assert(me.CleanMyDelays()); Log('respawn-live'); WaitFrames(1); Log('respawn-next')","first","OnRespawnScript")};
+    authored.records[1].scripts={reference(scripts,1),reference(scripts,3)};authored.records[2].scripts={reference(scripts,2)};
+    CourseSession session(authored,scripts,0);player.position={10,0,0};session.tick(player,0);
+    player.position={20,0,0};session.tick(player,0);
+    check(session.tasks().size()==2&&session.requestRespawn(),"Owned cancellation fixture did not overlap its actor waits");
+    session.tick(player,0);session.tick(player,0);session.tick(player,0);session.tick(player,1);
+    std::vector<std::string> messages;for(auto& log:session.logs())messages.push_back(log.message);
+    check(messages==std::vector<std::string>{"first-wait","second-wait","respawn-live","respawn-next","second-live"},
+          "Respawn cleanup canceled its active task, crossed actor ownership, or resumed stale work");
+    check(session.logs()[0].owner==2&&session.logs()[1].owner==3&&session.tasks().empty()&&!session.droppedLogs(),
+          "Session delay ownership or cancellation collection differs");
+    check(session.issues().size()==1&&session.issues()[0].field=="SetLastCheckPoint"&&!session.issues()[0].task,
+          "Cancellation was reported as a script error or hid another failure");
+
+    // SendToToucher changes the task's me to the fighter. Cleaning the
+    // invocation's owner must not cancel that different receiver's delay.
+    authored=scene();authored.records[1].sendToToucher=true;
+    scripts={source("function Unused() end"),
+        source("me.SetLastCheckPoint(false); WaitFrames(8); Log('fighter-stale')","first"),
+        source("assert(scene['actor-1'].CleanMyDelays()); WaitFrames(1); assert(scene['player/gamepad0'].CleanMyDelays()); Log('fighter-cleaned')","second")};
+    authored.records[1].scripts={reference(scripts,1)};authored.records[2].scripts={reference(scripts,2)};
+    CourseSession toucher(authored,scripts,0);player.position={10,0,0};toucher.tick(player,0);
+    check(toucher.tasks().size()==1&&toucher.tasks()[0].status==ScriptStatus::Waiting,"SendToToucher did not create a fighter wait");
+    player.position={20,0,0};toucher.tick(player,0);
+    auto toucherTasks=toucher.tasks();
+    check(toucherTasks.size()==2&&std::all_of(toucherTasks.begin(),toucherTasks.end(),[](auto& task) { return task.status==ScriptStatus::Waiting; }),
+          "Invocation-owner cleanup canceled a SendToToucher fighter delay");
+    for(unsigned i=0;i<9;++i)toucher.tick(player,0);
+    check(toucher.tasks().empty()&&toucher.logs().size()==1&&toucher.logs()[0].message=="fighter-cleaned",
+          "Fighter receiver cleanup left its suspended SendToToucher task alive");
+
+    struct DynamicActor final:ScriptObject {
+        std::vector<std::string> calls;
+        bool hasMethod(std::string_view name) const override { return name=="Reset"||name=="Pause"||name=="Resume"; }
+        ScriptValue call(std::string_view name,std::span<const ScriptValue> arguments) override {
+            check(arguments.empty(),"Dynamic actor fixture received unexpected arguments");
+            if(!hasMethod(name))return ScriptObject::call(name,arguments);
+            calls.emplace_back(name);return true;
+        }
+    };
+    auto dynamic=std::make_shared<DynamicActor>();std::vector<uint32_t> chunks;
+    ScriptActorLookup lookup=[&](uint32_t chunk,std::string_view name)->ScriptObjectPtr {
+        chunks.push_back(chunk);return name=="obstacle/native-fixture"?dynamic:nullptr;
+    };
+    authored=scene();authored.records.resize(2);authored.records[1].chunk=17;
+    scripts={source("function Unused() end"),source("assert(me.CleanMyDelays()); scene['obstacle/native-fixture'].Reset(); Wait(.2); scene['obstacle/native-fixture'].Resume()","first")};
+    authored.records[1].scripts={reference(scripts,1)};
+    CourseSession host(authored,scripts,0,{0,0,.5f},{.5f,.5f,.5f},lookup);player.position={10,0,0};host.tick(player,0);
+    check(dynamic->calls==std::vector<std::string>{"Reset"}&&host.tasks().size()==1,"Dynamic actor lookup did not execute before Wait");
+    host.tick(player,.19);check(dynamic->calls.size()==1,"Dynamic actor continuation resumed before its delay");host.tick(player,.01);
+    check(dynamic->calls==std::vector<std::string>{"Reset","Resume"}&&chunks==std::vector<uint32_t>{17,17}&&host.issues().empty()&&host.tasks().empty(),
+          "Dynamic actor lookup lost the invoking chunk across Wait");
+    for(auto code:{"scene['missing'].Reset()","scene['obstacle/native-fixture'].Unsupported()"}) {
+        scripts[1]=source(code,"first");authored.records[1].scripts={reference(scripts,1)};
+        CourseSession unsupported(authored,scripts,0,{0,0,.5f},{.5f,.5f,.5f},lookup);unsupported.tick(player,0);
+        check(unsupported.issues().size()==1&&unsupported.issues()[0].task&&!unsupported.issues()[0].error.empty(),
+              "Dynamic actor provider returned placeholder success for a missing actor or method");
+    }
+}
 void transformedContactAndFinishTimer() {
     auto model=testModel();CoursePlayer player(model,testSettings());auto authored=scene();authored.records.resize(2);
     auto& finish=authored.records[1];finish.boxes[0].collisionGroup=512;
@@ -177,7 +241,7 @@ void ownedAssets(const std::filesystem::path& directory) {
 }
 int main(int argc,char** argv) {
     try {
-        contextCheckpointAndRespawn();countersCooldownAndUnsupported();transformedContactAndFinishTimer();
+        contextCheckpointAndRespawn();countersCooldownAndUnsupported();ownedDelayCleanupAndActorLookup();transformedContactAndFinishTimer();
         if(argc==2)ownedAssets(argv[1]);else check(argc==1,"Usage: NativeSessionTests [private-assets-directory]");
         std::cout<<"Native session checkpoint contexts, contacts, cooldown, exact respawn and finish-line timer checks passed\n";return 0;
     } catch(const std::exception& error) { std::cerr<<"Native session test: "<<error.what()<<'\n';return 1; }

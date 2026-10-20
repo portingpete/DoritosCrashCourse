@@ -243,6 +243,60 @@ void failures() {
     std::string reenter="Reenter()";vm.start(bytes(reenter),"native-reentry");vm.tick(0);
     check(vm.tasks()[0].status==ScriptStatus::Failed&&vm.tasks()[0].error.find("not reentrant")!=std::string::npos,"Native scheduler allowed callback reentry");
 }
+void logsAndOwnedDelays() {
+    ScriptVm vm;
+    // The original release sink emits nothing, but Log returns true and reads
+    // only a string at argument one. Native retention is observable telemetry.
+    std::string logging="assert(Log('first',{})==true); WaitFrames(1); assert(Log('a'..string.char(0)..'b')); Log(42); Log()";
+    auto logTask=vm.start(bytes(logging),"native-log",{},71);vm.tick(.1);vm.tick(.2);
+    check(vm.tasks()[0].status==ScriptStatus::Complete&&vm.logs().size()==4,"Native Log contract failed");
+    check(vm.logs()[0].message=="first"&&vm.logs()[1].message=="a"&&vm.logs()[2].message.empty()&&vm.logs()[3].message.empty(),
+          "Native Log string extraction differs");
+    check(vm.logs()[0].task==logTask&&vm.logs()[0].owner==71&&std::abs(vm.logs()[0].time-.1)<1e-9&&
+          std::abs(vm.logs()[1].time-.3)<1e-9,"Native Log lost task ownership or scheduler time");
+    vm.clearFinished();check(vm.logs().size()==4,"Task collection erased native logs");vm.clearLogs();
+    std::string saturation="for i=1,1030 do Log('bounded') end";
+    vm.start(bytes(saturation),"native-log-budget");vm.tick(0);
+    check(vm.tasks()[0].status==ScriptStatus::Complete&&vm.logs().size()==1024&&vm.droppedLogs()==6,"Native Log retention is unbounded or changes dispatch");
+    vm.clearFinished();vm.clearLogs();check(vm.logs().empty()&&!vm.droppedLogs(),"Native log reset retained old overflow");
+    std::string oversized="Log(string.rep('x',4097))";
+    vm.start(bytes(oversized),"native-log-string-budget");vm.tick(0);
+    check(vm.tasks()[0].status==ScriptStatus::Failed&&vm.tasks()[0].error.find("Log string outside budget")!=std::string::npos,"Native Log bypassed host string quota");
+    vm.clearFinished();
+
+    std::string timeWait="Wait(1); Log('time-resumed')",frameWait="WaitFrames(3); Log('frame-resumed')";
+    // Same low bits, different upper bits: the complete owner tag must match.
+    constexpr uint64_t alpha=0x100000007ULL,beta=0x200000007ULL;
+    vm.start(bytes(timeWait),"alpha-time",{},alpha);vm.start(bytes(frameWait),"alpha-frame",{},alpha);
+    vm.start(bytes(frameWait),"beta-frame",{},beta);vm.start(bytes(timeWait),"kernel-time");vm.tick(0);
+    check(vm.cancelDelays(alpha)==2&&vm.cancelDelays(alpha)==0,"Owned delay cancellation did not match exactly or was not idempotent");
+    auto states=vm.tasks();check(states[0].status==ScriptStatus::Cancelled&&states[1].status==ScriptStatus::Cancelled&&
+        states[2].status==ScriptStatus::Waiting&&states[3].status==ScriptStatus::Waiting,"Owned cancellation crossed actor/kernel boundaries");
+    vm.clearFinished();check(vm.tasks().size()==2,"Cancelled coroutine references were not collected");
+    std::string clean="assert(CleanMyDelays()); Log('kernel-current'); Wait(0); Log('kernel-next')";
+    vm.start(bytes(clean),"native-global-clean");vm.tick(0);
+    states=vm.tasks();check(states[0].status==ScriptStatus::Waiting&&states[1].status==ScriptStatus::Cancelled&&states[2].status==ScriptStatus::Waiting,
+          "Global CleanMyDelays canceled another owner or its current invocation");
+    vm.tick(0);vm.tick(0);vm.tick(1);
+    check(vm.logs().size()==3&&vm.logs()[0].message=="kernel-current"&&vm.logs()[1].message=="kernel-next"&&vm.logs()[2].owner==beta,
+          "Canceled delay resumed or protected invocation could not wait again");
+    vm.clearFinished();vm.clearLogs();
+
+    // A task that has not yet called Wait has no delayed continuation to clean.
+    vm.start(bytes(frameWait),"queued-owner",{},alpha);
+    check(vm.cancelDelays(alpha)==0&&vm.tasks()[0].status==ScriptStatus::Queued,"Cancellation removed work before it created a delay");
+    vm.tick(0);check(vm.cancelDelays(alpha)==1,"Queued work could not later become a cancellable delay");vm.clearFinished();
+    // A resumed task still has Waiting status during its callback; protection
+    // therefore requires identity, rather than a status-only filter.
+    vm.bind("CleanOwner",[&](auto)->ScriptValue { return double(vm.cancelDelays(alpha)); });
+    std::string resumed="WaitFrames(1); assert(CleanOwner()==0); WaitFrames(1); Log('protected-resume')";
+    vm.start(bytes(resumed),"native-current-owner",{},alpha);vm.tick(0);vm.tick(0);vm.tick(0);
+    check(vm.tasks()[0].status==ScriptStatus::Complete&&vm.logs().size()==1,"Owner cleanup canceled its resumed active coroutine");
+    vm.clearFinished();
+    int alive=0;auto object=std::make_shared<TrackedObject>(alive);std::weak_ptr<TrackedObject> weak=object;
+    vm.start(bytes(timeWait),"native-cancel-gc",{{"me",ScriptObjectPtr(object)}},alpha);object.reset();vm.tick(0);vm.cancelDelays(alpha);vm.clearFinished();
+    check(weak.expired()&&alive==0,"Cancelled coroutine retained its native context");
+}
 void allocation() {
     ScriptVm vm(1024*1024,10000000);
     std::string growth="local t={} for i=1,1000000 do t[i]=string.rep('x',1000)..i end";
@@ -292,7 +346,7 @@ void bundle() {
 }
 int main(int argc,char** argv) {
     try {
-        scheduler();frameScheduler();failures();allocation();objects();contexts();objectLifetime();bundle();
+        scheduler();frameScheduler();failures();logsAndOwnedDelays();allocation();objects();contexts();objectLifetime();bundle();
         if(argc>1) {
             auto chunks=loadScripts(argv[1]);ScriptVm vm;
             for(auto& chunk:chunks)vm.validate(chunk.code,chunk.source+":"+chunk.actor+":"+chunk.field);

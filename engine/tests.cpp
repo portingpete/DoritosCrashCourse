@@ -21,6 +21,8 @@ int main() {
         mesh.vertices.push_back(vertex);
         auto rest=skin(mesh,samplePose(model,nullptr,0));
         expect(near(rest[0].position.x,1)&&near(rest[0].position.y,2),"Native inverse bind does not preserve rest geometry");
+        auto attachments=sampleBoneTransforms(model,nullptr,0);
+        expect(near(attachments[1]._42,2)&&near(attachments[1]._41,0),"Bone attachment used inverse bind instead of absolute hierarchy");
         Clip clip; clip.duration=2;
         Track track; track.bone=1;
         Key first; first.transform=model.bones[1].rest;
@@ -28,6 +30,8 @@ int main() {
         track.keys={first,last}; clip.tracks={track};
         auto halfway=skin(mesh,samplePose(model,&clip,.5f));
         expect(near(halfway[0].position.x,0)&&near(halfway[0].position.y,2),"Native quaternion interpolation or parent transform is wrong");
+        attachments=sampleBoneTransforms(model,&clip,.5f);
+        expect(near(attachments[1]._42,3)&&near(attachments[1]._41,0),"Animated attachment lost authored absolute bone translation");
         auto looped=skin(mesh,samplePose(model,&clip,2.5f));
         expect(near(looped[0].position.x,halfway[0].position.x)&&near(looped[0].position.y,halfway[0].position.y),"Native animation looping differs");
         auto blended=skin(mesh,blendPose(model,&clip,0,&clip,1,.5f,false));

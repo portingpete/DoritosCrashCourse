@@ -32,12 +32,17 @@ public:
     virtual ScriptValue call(std::string_view name,std::span<const ScriptValue> arguments);
 };
 using ScriptContext=std::map<std::string,ScriptValue,std::less<>>;
-enum class ScriptStatus { Queued,Waiting,Complete,Failed };
+enum class ScriptStatus { Queued,Waiting,Complete,Failed,Cancelled };
 struct ScriptTask {
     uint64_t id=0;
     ScriptStatus status=ScriptStatus::Queued;
     double wakeTime=0;
     std::string error;
+};
+struct ScriptLog {
+    uint64_t task=0,owner=0;
+    double time=0;
+    std::string message;
 };
 class ScriptVm {
     struct Impl;
@@ -50,7 +55,13 @@ public:
     void validate(std::span<const uint8_t> code,const std::string& name);
     void bind(const std::string& name,ScriptFunction function);
     void setGlobal(const std::string& name,const ScriptValue& value);
-    uint64_t start(std::span<const uint8_t> code,const std::string& name,ScriptContext context={});
+    // Owner zero denotes kernel/global work. Every other owner is a stable
+    // host-assigned identity, independent of mutable Lua me/owner globals.
+    uint64_t start(std::span<const uint8_t> code,const std::string& name,ScriptContext context={},uint64_t owner=0);
+    // Cancel suspended Wait/WaitFrames continuations for exactly this owner.
+    // Queued work has no delay yet; the active continuation is protected even
+    // when it resumed from Waiting. Safe inside a native method callback.
+    size_t cancelDelays(uint64_t owner);
     // Valid only while the current native callback/task runs. Shared Lua
     // functions resolve these same task-specific globals on every invocation.
     const ScriptContext* currentContext() const noexcept;
@@ -61,6 +72,12 @@ public:
     void tick(double seconds);
     std::vector<ScriptTask> tasks() const;
     void clearFinished();
+    // Native observability extension: the original release Log sink is absent.
+    // Keep at most 1024 first-string messages of at most 4096 bytes; excess
+    // records are counted, with no effect on the script's true return value.
+    const std::vector<ScriptLog>& logs() const noexcept;
+    uint64_t droppedLogs() const noexcept;
+    void clearLogs();
     size_t memoryUsed() const;
 };
 }

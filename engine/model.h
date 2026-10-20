@@ -36,6 +36,9 @@ struct Model {
 };
 Model loadModel(const std::filesystem::path& path);
 std::vector<XMFLOAT4X4> samplePose(const Model& model, const Clip* clip, float seconds, bool loop=true);
+// Absolute model-space bone transforms for attachments. Skinning transforms
+// also include inverse bind and must not be used as attachment transforms.
+std::vector<XMFLOAT4X4> sampleBoneTransforms(const Model& model,const Clip* clip,float seconds,bool loop=true);
 std::vector<XMFLOAT4X4> blendPose(const Model& model,const Clip* first,float firstTime,const Clip* second,float secondTime,float weight,bool loop=true);
 XMFLOAT3 rootMotionDelta(const Clip& clip,double firstTime,double secondTime,bool loop=true);
 std::vector<DrawVertex> skin(const Mesh& mesh, const std::vector<XMFLOAT4X4>& pose);

@@ -6,6 +6,7 @@
 #include "scripts.h"
 #include "environment.h"
 #include "session.h"
+#include "actors.h"
 #include <windows.h>
 #include <d3d11.h>
 #include <d3dcompiler.h>
@@ -42,7 +43,7 @@ void localPath(const std::filesystem::path& path) {
 struct Options {
     std::filesystem::path assets=L"build_native/engine_inputs", evidence;
     bool hidden=false, verify=false, check=false, coursePreview=false, verifyCourses=false;
-    bool coursePlay=false,verifyPlayer=false,verifyConveyors=false;
+    bool coursePlay=false,verifyPlayer=false,verifyConveyors=false,verifyActors=false;
     unsigned level=0;
 };
 Options options(int argc,wchar_t** argv) {
@@ -53,6 +54,7 @@ Options options(int argc,wchar_t** argv) {
         else if(argument==L"--course-play")result.coursePlay=result.coursePreview=true;
         else if(argument==L"--verify-player" && i+1<argc) { result.verifyPlayer=result.coursePlay=result.coursePreview=result.verify=true;result.evidence=argv[++i]; }
         else if(argument==L"--verify-conveyors" && i+1<argc) { result.verifyConveyors=result.coursePlay=result.coursePreview=result.verify=true;result.evidence=argv[++i]; }
+        else if(argument==L"--verify-actors" && i+1<argc) { result.verifyActors=result.coursePreview=result.verify=true;result.evidence=argv[++i]; }
         else if(argument==L"--course-preview")result.coursePreview=true;
         else if(argument==L"--verify-courses" && i+1<argc) { result.verifyCourses=result.coursePreview=result.verify=true;result.evidence=argv[++i]; }
         else if(argument==L"--check")result.check=true;
@@ -62,7 +64,8 @@ Options options(int argc,wchar_t** argv) {
         else throw std::runtime_error("Unknown native engine argument");
     }
     if((result.coursePlay&&result.verify&&!result.verifyPlayer&&!result.verifyConveyors)||(result.verifyCourses&&result.coursePlay)
-       ||(result.verifyPlayer&&result.verifyConveyors)||(result.verifyConveyors&&result.level!=0))
+       ||(result.verifyPlayer&&result.verifyConveyors)||(result.verifyConveyors&&result.level!=0)
+       ||(result.verifyActors&&(result.coursePlay||result.verifyCourses||result.level!=0)))
         throw std::runtime_error("Choose one native verification mode");
     localPath(result.assets);
     if(result.verify) {
@@ -124,6 +127,8 @@ struct Renderer {
     ComPtr<ID3D11BlendState> blend;
     std::vector<GpuMesh> meshes;
     GpuWorld courseGeometry,environmentGeometry;
+    std::vector<std::vector<GpuMesh>> actorGeometry;
+    std::vector<ComPtr<ID3D11ShaderResourceView>> actorTextures;
     XMFLOAT4 ambient{.4f,.4f,.4f,0};
     std::array<XMFLOAT4,4> lightDirections{},lightColors{};
     GpuMesh floor;
@@ -229,6 +234,22 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
             }
         }
     }
+    void loadActorGeometry(const Actors& actors,const std::filesystem::path& assets) {
+        for(const auto& source:actors.models) {
+            std::vector<GpuMesh> groups;const auto pose=samplePose(source.model,nullptr,0);
+            for(const auto& mesh:source.model.meshes)groups.push_back(geometry(skin(mesh,pose),mesh.indices));
+            actorGeometry.push_back(std::move(groups));
+        }
+        std::map<std::string,ComPtr<ID3D11ShaderResourceView>> cache;
+        uint8_t white[]{255,255,255,255};auto fallback=rgba(1,1,white);
+        for(const auto& material:actors.materials) {
+            if(material.texture.empty())actorTextures.push_back(fallback);
+            else {
+                if(!cache.contains(material.texture))cache[material.texture]=image(assets/std::filesystem::path(material.texture));
+                actorTextures.push_back(cache.at(material.texture));
+            }
+        }
+    }
     void draw(GpuMesh& mesh,FXMMATRIX world,FXMMATRIX viewProjection,uint32_t first=0,uint32_t count=0,XMFLOAT4 tint={1,1,1,1},bool lit=true,XMFLOAT2 uvOffset={}) {
         struct Camera { XMFLOAT4X4 worldViewProjection,world;XMFLOAT4 tint,properties,ambient;std::array<XMFLOAT4,4> directions,colors; } camera;
         static_assert(sizeof(Camera)==304);
@@ -252,6 +273,21 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
             }
         }
     }
+    void drawActors(const Actors& actors,const CourseActorSystem* runtime,unsigned course,FXMMATRIX viewProjection,XMFLOAT3 focus) {
+        const auto& instances=actors.courses.at(course).hammers;
+        for(size_t i=0;i<instances.size();++i) {
+            const auto& instance=instances[i];if(std::abs(instance.actorWorld._41-focus.x)>100)continue;
+            const auto& source=actors.models.at(instance.model);
+            auto pose=runtime?runtime->pose(i):samplePose(source.model,nullptr,0);auto transform=actorModelWorld(instance);
+            for(size_t j=0;j<source.model.meshes.size();++j) {
+                auto& mesh=actorGeometry.at(instance.model).at(j);const auto vertices=skin(source.model.meshes[j],pose);
+                D3D11_MAPPED_SUBRESOURCE mapped{};check(context->Map(mesh.vertices.Get(),0,D3D11_MAP_WRITE_DISCARD,0,&mapped),"Cannot update native obstacle geometry");
+                memcpy(mapped.pData,vertices.data(),vertices.size()*sizeof(DrawVertex));context->Unmap(mesh.vertices.Get(),0);
+                const auto materialIndex=source.materials.at(j);const auto& material=actors.materials.at(materialIndex);mesh.texture=actorTextures.at(materialIndex);
+                draw(mesh,XMLoadFloat4x4(&transform),viewProjection,0,0,material.color,material.lit,materialUvOffset(material,effectTime));
+            }
+        }
+    }
     void lighting(const EnvironmentStage* stage) {
         lightDirections={};lightColors={};ambient={.4f,.4f,.4f,0};
         if(!stage) {
@@ -270,7 +306,8 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
         }
     }
     void frame(const Model& model,const Player& player,unsigned course,const World* world=nullptr,XMFLOAT3 focus={},const CoursePlayer* actor=nullptr,
-               const World* environment=nullptr,const EnvironmentStage* stage=nullptr,const CourseSession* session=nullptr) {
+               const World* environment=nullptr,const EnvironmentStage* stage=nullptr,const CourseSession* session=nullptr,
+               const Actors* actors=nullptr,const CourseActorSystem* dynamics=nullptr) {
         XMFLOAT4 color=stage?stage->background:XMFLOAT4{.075f,.095f,.085f,1};context->ClearRenderTargetView(target.Get(),&color.x);
         lighting(stage);
         context->ClearDepthStencilView(depth.Get(),D3D11_CLEAR_DEPTH|D3D11_CLEAR_STENCIL,1,0);
@@ -288,6 +325,7 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
         if(world) {
             if(environment)drawWorld(*environment,environmentGeometry,course,viewProjection,focus,false);
             drawWorld(*world,courseGeometry,course,viewProjection,focus,true);
+            if(actors)drawActors(*actors,dynamics,course,viewProjection,focus);
         } else draw(floor,XMMatrixIdentity(),viewProjection);
         const Clip* clip=nullptr; for(const auto& c:model.clips)if(c.name==player.animation)clip=&c;
         auto pose=actor?actor->pose():samplePose(model,clip,player.animationTime);
@@ -306,7 +344,7 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
         std::wstring text=actor?L"INDEPENDENT NATIVE ENGINE / COURSE MOVEMENT\n":world?L"INDEPENDENT NATIVE ENGINE / STATIC COURSE INSPECTION\n":L"INDEPENDENT NATIVE ENGINE / CHARACTER PREVIEW\n";
         if(course<model.courses.size()) { auto& level=model.courses[course]; text+=std::wstring(level.name.begin(),level.name.end())+L" / "+std::to_wstring(level.chunks.size())+L" original chunk definitions loaded\n"; }
         text+=actor?L"A/D: move   Space: jump (hold for height)   R: checkpoint respawn   Tab: next course   Esc: close\n":world?L"A/D: pan camera   W/S: camera height   Tab: next course   Esc: close\n":L"A/D: move   Space: jump   Tab: course catalog   Esc: close\n";
-        text+=actor?L"Static platforms and scene triggers. Dynamic obstacles, effects, audio and full-game behavior are pending.\n":world?L"Static course and environment meshes. Dynamic actors, effects and full gameplay are pending.\n":L"D3D11 / PC animation / native simulation arena. Use --course-preview for static course inspection.\n";
+        text+=actor?L"Course movement, scene triggers and skeletal hammer preview. Actor groups, impacts, effects, audio and full gameplay are pending.\n":world?L"Course, environment and skeletal actor preview. Actor groups, impacts, effects and full gameplay are pending.\n":L"D3D11 / PC animation / native simulation arena. Use --course-preview for course inspection.\n";
         text+=L"Time "+std::to_wstring(player.clock)+L"  X "+std::to_wstring(player.position.x)+L"  "+std::wstring(player.animation.begin(),player.animation.end());
         if(session) {
             text+=L"\nRace "+std::to_wstring(session->elapsed())+L"  Checkpoints "+std::to_wstring(session->checkpointCount())+L"  Respawns "+std::to_wstring(session->respawnCount());
@@ -527,6 +565,11 @@ int wmain(int argc,wchar_t** argv) {
                 for(const auto& level:scene.courses) { records+=level.records.size();for(const auto& record:level.records)boxes+=record.boxes.size(); }
                 if(backdrop.courses.size()!=15||scene.courses.size()!=15)throw std::runtime_error("Native scene catalog is incomplete");
                 std::cout<<"[NATIVE SCENE CHECK] stages="<<environment.stages.size()<<" environment_meshes="<<backdrop.meshes.size()<<" trigger_records="<<records<<" trigger_boxes="<<boxes<<'\n';
+                if(std::filesystem::exists(option.assets/L"actors.dna")) {
+                    auto actors=loadActors(option.assets/L"actors.dna");size_t instances=0,attachments=0;
+                    for(const auto& course:actors.courses)for(const auto& instance:course.hammers) { ++instances;attachments+=instance.boxes.size(); }
+                    std::cout<<"[NATIVE ACTOR CHECK] models="<<actors.models.size()<<" hammers="<<instances<<" bone_boxes="<<attachments<<" impacts_pending=1\n";
+                }
             }
             std::cout<<"[NATIVE CHECK] rest_pose_max_error="<<worst<<" passed=1\n"; return 0;
         }
@@ -534,11 +577,45 @@ int wmain(int argc,wchar_t** argv) {
         struct ComCleanup { ~ComCleanup(){CoUninitialize();} } cleanup;
         NativeWindow window(option.hidden); Renderer renderer(window.handle); renderer.load(model,option.assets);
         std::optional<World> world,backdrop;std::optional<Environment> environment;
+        std::optional<Actors> actors;std::unique_ptr<CourseActorSystem> dynamics;
         if(option.coursePreview) {
             for(const auto* file:{L"world.dnw",L"environment.dnv",L"environment-world.dnw"})localPath(option.assets/file);
             world=loadWorld(option.assets/L"world.dnw");renderer.loadWorldGeometry(*world,option.assets,renderer.courseGeometry);
             backdrop=loadWorld(option.assets/L"environment-world.dnw");renderer.loadWorldGeometry(*backdrop,option.assets,renderer.environmentGeometry);
             environment=loadEnvironment(option.assets/L"environment.dnv");
+            if(std::filesystem::exists(option.assets/L"actors.dna")) {
+                actors=loadActors(option.assets/L"actors.dna");renderer.loadActorGeometry(*actors,option.assets);
+                dynamics=std::make_unique<CourseActorSystem>(*actors,option.level);
+            }
+        }
+        if(option.verifyActors) {
+            if(!actors||!dynamics)throw std::runtime_error("Actor verification requires actors.dna");
+            const auto& hammers=actors->courses[0].hammers;
+            auto found=std::find_if(hammers.begin(),hammers.end(),[](const auto& h){return h.chunk==4&&h.ordinal==10;});
+            if(found==hammers.end())throw std::runtime_error("Authored USA1 hammer verification target is absent");
+            const size_t index=size_t(found-hammers.begin());auto object=dynamics->lookup(found->chunk,found->name);
+            if(!object)throw std::runtime_error("Native hammer script lookup failed");
+            std::ofstream trace(option.evidence/L"actors.csv");trace<<"case,running,first_pending,playing,countdown,animation_time,plays,box,x,y,z\n"<<std::setprecision(10);
+            Player preview;XMFLOAT3 focus{found->actorWorld._41,found->actorWorld._42,found->actorWorld._43};
+            auto capture=[&](const wchar_t* label) {
+                if(!window.events())throw std::runtime_error("Actor verification window closed");
+                const auto state=dynamics->states().at(index);auto boxes=dynamics->boxTransforms(index);
+                for(size_t i=0;i<boxes.size();++i) {
+                    const auto& m=boxes[i];trace<<std::filesystem::path(label).string()<<','<<state.running<<','<<state.firstPending<<','<<state.playing<<','<<state.countdown<<','<<state.animationTime<<','<<state.plays<<','<<i<<','<<m._41<<','<<m._42<<','<<m._43<<'\n';
+                }
+                renderer.frame(model,preview,0,&*world,focus,nullptr,&*backdrop,&environment->stageForCourse(0),nullptr,&*actors,dynamics.get());
+                renderer.capture(option.evidence/(std::wstring(label)+L".bmp"));renderer.present();
+            };
+            auto command=[&](const char* name,bool expected) { auto value=object->call(name,{});if(!std::holds_alternative<bool>(value)||std::get<bool>(value)!=expected)throw std::runtime_error("Hammer command return differs from authored wrapper"); };
+            capture(L"rest");command("Resume",true);dynamics->tick(.1f);capture(L"playing");
+            command("Pause",false);dynamics->tick(.2f);capture(L"paused-resource-advances");
+            command("Reset",true);dynamics->tick(.2f);capture(L"reset-resource-advances");
+            command("Resume",true);dynamics->tick(.05f);capture(L"resumed-restarts");
+            command("Pause",false);dynamics->tick(.75f);capture(L"held-final-pose");trace.flush();
+            auto state=dynamics->states().at(index);
+            if(!trace||state.plays!=2||state.running||!state.playing)throw std::runtime_error("Native hammer sequence failed");
+            std::ofstream report(option.evidence/L"result.json");report<<"{\"passed\":true,\"scope\":\"controlled-skeletal-hammer-preview\",\"captures\":6,\"plays\":"<<state.plays<<",\"animation_time\":"<<state.animationTime<<",\"notices\":"<<dynamics->notices().size()<<",\"impact_response_tested\":false,\"actor_group_lifecycle_tested\":false}\n";
+            if(!report)throw std::runtime_error("Cannot write native actor result");return 0;
         }
         std::unique_ptr<CoursePlayer> actor;std::vector<CourseCollision> collisions;float baseHeight=0;
         std::optional<Scene> scene;std::vector<ScriptChunk> scriptChunks;std::unique_ptr<CourseSession> session;
@@ -547,7 +624,8 @@ int wmain(int argc,wchar_t** argv) {
             auto settings=loadMovementSettings(option.assets/L"movement.dnp");collisions=loadCollision(option.assets/L"static-collision.dnc");
             actor=std::make_unique<CoursePlayer>(model,settings);actor->reset(world->courses[option.level].spawn,CourseStart::Startup,model.courses[option.level].theme);
             scene=loadScene(option.assets/L"scene.dns");scriptChunks=loadScripts(option.assets/L"scripts.dnl");
-            session=std::make_unique<CourseSession>(scene->courses[option.level],scriptChunks,model.courses[option.level].theme,settings.feetOffset,settings.feetRadii);
+            session=std::make_unique<CourseSession>(scene->courses[option.level],scriptChunks,model.courses[option.level].theme,settings.feetOffset,settings.feetRadii,
+                [&](uint32_t chunk,std::string_view name){return dynamics?dynamics->lookup(chunk,name):ScriptObjectPtr{};});
             auto hit=collisions[option.level].scene.ray(actor->position,{0,0,-1},10);
             if(!hit)throw std::runtime_error("Native player start has no static floor");baseHeight=hit->position.z;
         }
@@ -576,10 +654,12 @@ int wmain(int argc,wchar_t** argv) {
             pendingJump|=jump&&!previousJump; previousJump=jump;
             if(tab&&!previousTab) {
                 course=(course+1)%unsigned(model.courses.size());if(world)focus=world->courses[course].spawn;
+                if(actors)dynamics=std::make_unique<CourseActorSystem>(*actors,course);
                 if(actor) {
                     actor->reset(focus,CourseStart::Startup,model.courses[course].theme);
                     auto settings=loadMovementSettings(option.assets/L"movement.dnp");
-                    session=std::make_unique<CourseSession>(scene->courses[course],scriptChunks,model.courses[course].theme,settings.feetOffset,settings.feetRadii);
+                    session=std::make_unique<CourseSession>(scene->courses[course],scriptChunks,model.courses[course].theme,settings.feetOffset,settings.feetRadii,
+                        [&](uint32_t chunk,std::string_view name){return dynamics?dynamics->lookup(chunk,name):ScriptObjectPtr{};});
                     loggedIssues=0;
                 }
             } previousTab=tab;
@@ -597,6 +677,7 @@ int wmain(int argc,wchar_t** argv) {
                     }
                     actor->tick(controls,step,collisions[course].scene);
                     session->tick(*actor,step);
+                    if(dynamics)dynamics->tick(step);
                     while(loggedIssues<session->issues().size()) {
                         const auto& issue=session->issues()[loggedIssues++];
                         std::cerr<<"[NATIVE SCENE ISSUE] record="<<issue.record<<" field="<<issue.field<<" task="<<issue.task<<" error="<<issue.error<<'\n';
@@ -610,7 +691,7 @@ int wmain(int argc,wchar_t** argv) {
             }
             if(option.verifyCourses) { course=std::min(unsigned(player.clock),14u);focus=world->courses[course].inspection; }
             auto beforeDraws=renderer.draws;renderer.frame(model,player,course,world?&*world:nullptr,focus,actor.get(),backdrop?&*backdrop:nullptr,
-                environment?&environment->stageForCourse(course):nullptr,session.get());
+                environment?&environment->stageForCourse(course):nullptr,session.get(),actors?&*actors:nullptr,actor?dynamics.get():nullptr);
             if(world)courseDraws[course]+=renderer.draws-beforeDraws;
             if(option.verifyPlayer) {
                 if(captured<4 && actor->clock>=std::array<double,4>{1.4,1.7,2.15,3.6}[captured]) { renderer.capture(option.evidence/(L"player-"+std::to_wstring(captured)+L".bmp"));++captured; }

@@ -109,7 +109,7 @@ std::vector<Transform> localPose(const Model& model,const Clip* clip,float secon
     }
     return locals;
 }
-std::vector<XMFLOAT4X4> composePose(const Model& model,const std::vector<Transform>& locals) {
+std::vector<XMFLOAT4X4> composePose(const Model& model,const std::vector<Transform>& locals,bool forSkinning=true) {
     std::vector<XMFLOAT4X4> absolute(model.bones.size()), result(model.bones.size());
     std::vector<uint8_t> visited(model.bones.size());
     std::function<void(size_t)> visit=[&](size_t index) {
@@ -117,7 +117,7 @@ std::vector<XMFLOAT4X4> composePose(const Model& model,const std::vector<Transfo
         visited[index]=1; auto transform=matrix(locals[index]); auto parent=model.bones[index].parent;
         if(parent>=0) { need(size_t(parent)<model.bones.size(),"Bone parent outside skeleton"); visit(parent); transform=transform*XMLoadFloat4x4(&absolute[parent]); }
         XMStoreFloat4x4(&absolute[index],transform);
-        XMStoreFloat4x4(&result[index],matrix(model.bones[index].inverseBind)*transform);
+        XMStoreFloat4x4(&result[index],forSkinning?matrix(model.bones[index].inverseBind)*transform:transform);
         visited[index]=2;
     };
     for(size_t i=0;i<model.bones.size();++i)visit(i); return result;
@@ -132,6 +132,9 @@ XMFLOAT3 motionPosition(const Clip& clip,float time) {
 }
 std::vector<XMFLOAT4X4> samplePose(const Model& model,const Clip* clip,float seconds,bool loop) {
     return composePose(model,localPose(model,clip,seconds,loop));
+}
+std::vector<XMFLOAT4X4> sampleBoneTransforms(const Model& model,const Clip* clip,float seconds,bool loop) {
+    return composePose(model,localPose(model,clip,seconds,loop),false);
 }
 std::vector<XMFLOAT4X4> blendPose(const Model& model,const Clip* first,float firstTime,const Clip* second,float secondTime,float weight,bool loop) {
     need(std::isfinite(weight)&&weight>=0&&weight<=1,"Native pose blend outside range");

@@ -25,6 +25,9 @@ struct SessionTriggerState {
     std::vector<std::string> resources; // Native zero-based reverse authored order.
     std::string error;
 };
+// A missing authored trigger lookup may be provided by an independently
+// implemented actor system. Null preserves the unsupported-actor failure.
+using ScriptActorLookup=std::function<ScriptObjectPtr(uint32_t chunk,std::string_view name)>;
 // A session owns the native script VM and mutable trigger/HUD state. It keeps
 // references to immutable authored data, whose lifetime must cover the session.
 class CourseSession {
@@ -32,7 +35,7 @@ class CourseSession {
     std::unique_ptr<Impl> impl;
 public:
     CourseSession(const CourseScene& scene,const std::vector<ScriptChunk>& scripts,unsigned theme,
-                  XMFLOAT3 feetOffset={0,0,.5f},XMFLOAT3 feetRadii={.5f,.5f,.5f});
+                  XMFLOAT3 feetOffset={0,0,.5f},XMFLOAT3 feetRadii={.5f,.5f,.5f},ScriptActorLookup actorLookup={});
     ~CourseSession();
     CourseSession(const CourseSession&)=delete;
     CourseSession& operator=(const CourseSession&)=delete;
@@ -47,6 +50,8 @@ public:
     const std::vector<SessionIssue>& issues() const;
     const std::vector<SessionHudControl>& hud() const;
     const std::vector<SessionTriggerState>& triggers() const;
+    const std::vector<ScriptLog>& logs() const;
+    uint64_t droppedLogs() const;
     std::vector<ScriptTask> tasks() const;
 };
 }

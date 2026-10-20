@@ -120,6 +120,8 @@ struct CourseSession::Impl {
     XMFLOAT3 feetOffset{},feetRadii{};
     uint32_t randomState=0;
     ScriptVm vm;
+    ScriptActorLookup actorLookup;
+    static constexpr uint64_t fighterOwner=UINT64_MAX;
     std::vector<SessionTriggerState> triggerState;
     std::vector<SessionIssue> issueState;
     std::vector<SessionHudControl> hudState;
@@ -164,8 +166,9 @@ struct CourseSession::Impl {
             if(name=="Enabled") { owner.triggerState[record].enabled=boolean(value);return; }
             ScriptObject::set(name,value);
         }
-        bool hasMethod(std::string_view name) const override { return name=="Activate"||name=="DeActivate"; }
+        bool hasMethod(std::string_view name) const override { return name=="Activate"||name=="DeActivate"||name=="CleanMyDelays"; }
         ScriptValue call(std::string_view name,std::span<const ScriptValue> arguments) override {
+            if(name=="CleanMyDelays") { owner.vm.cancelDelays(record+1);return true; }
             if(name=="Activate"||name=="DeActivate") {
                 requireSession(arguments.empty(),"Trigger activation does not accept arguments");
                 owner.triggerState[record].enabled=name=="Activate";
@@ -182,9 +185,10 @@ struct CourseSession::Impl {
             if(name=="Name")return std::string("player/gamepad0");return ScriptObject::get(name);
         }
         bool hasMethod(std::string_view name) const override {
-            return name=="SetLastCheckPoint"||name=="Respawn"||name=="SetFighterActionState";
+            return name=="SetLastCheckPoint"||name=="Respawn"||name=="SetFighterActionState"||name=="CleanMyDelays";
         }
         ScriptValue call(std::string_view name,std::span<const ScriptValue> arguments) override {
+            if(name=="CleanMyDelays") { owner.vm.cancelDelays(fighterOwner);return true; }
             if(name=="SetLastCheckPoint") {
                 requireSession(arguments.size()<=1,"SetLastCheckPoint accepts one optional boolean");
                 bool switchGroups=arguments.empty()?true:boolean(arguments[0]);
@@ -220,13 +224,14 @@ struct CourseSession::Impl {
             if(!candidate)for(size_t i=0;i<owner.scene.records.size();++i)if(owner.scene.records[i].name==name) {
                 requireSession(!candidate,"Authored actor name is ambiguous across chunks");candidate=i;
             }
+            if(!candidate&&owner.actorLookup)if(auto actor=owner.actorLookup(chunk,name))return actor;
             requireSession(candidate.has_value(),"Referenced scene actor is outside the implemented native trigger scene");
             return ScriptObjectPtr(std::make_shared<ActorObject>(owner,*candidate,owner.fighter));
         }
     };
 
-    Impl(const CourseScene& authored,const std::vector<ScriptChunk>& catalog,unsigned country,XMFLOAT3 offset,XMFLOAT3 radii):
-        scene(authored),scripts(catalog),theme(country),feetOffset(offset),feetRadii(radii),randomState(authored.id+1) {
+    Impl(const CourseScene& authored,const std::vector<ScriptChunk>& catalog,unsigned country,XMFLOAT3 offset,XMFLOAT3 radii,ScriptActorLookup lookup):
+        scene(authored),scripts(catalog),theme(country),feetOffset(offset),feetRadii(radii),randomState(authored.id+1),actorLookup(std::move(lookup)) {
         requireSession(theme<3&&scene.records.size()<=4096,"Native session catalog outside budget");
         for(float value:{feetOffset.x,feetOffset.y,feetOffset.z})requireSession(std::isfinite(value),"Invalid native session feet offset");
         for(float value:{feetRadii.x,feetRadii.y,feetRadii.z})requireSession(std::isfinite(value)&&value>0,"Invalid native session feet radii");
@@ -305,7 +310,7 @@ struct CourseSession::Impl {
         issueState.push_back({id,task,std::move(field),std::move(error)});
     }
     void harvest() {
-        for(auto& task:vm.tasks())if(task.status==ScriptStatus::Complete||task.status==ScriptStatus::Failed) {
+        for(auto& task:vm.tasks())if(task.status==ScriptStatus::Complete||task.status==ScriptStatus::Failed||task.status==ScriptStatus::Cancelled) {
             auto found=taskOwners.find(task.id);
             if(task.status==ScriptStatus::Failed) {
                 if(found!=taskOwners.end())issue(found->second.first,found->second.second,task.error,task.id);
@@ -326,7 +331,7 @@ struct CourseSession::Impl {
                 auto invocation=ScriptObjectPtr(std::make_shared<ActorObject>(*this,index,fighter));
                 bool sendToToucher=field=="Command"&&record.sendToToucher;
                 ScriptContext context{{"me",sendToToucher?fighter:invocation},{"owner",invocation},{"collided",fighter}};
-                auto id=vm.start(chunk.code,record.name+":"+reference.field,std::move(context));
+                auto id=vm.start(chunk.code,record.name+":"+reference.field,std::move(context),sendToToucher?fighterOwner:index+1);
                 taskOwners.emplace(id,std::pair{index,reference.field});
             } catch(const std::exception& error) { issue(index,std::string(field),error.what()); }
         }
@@ -371,8 +376,8 @@ struct CourseSession::Impl {
     }
 };
 
-CourseSession::CourseSession(const CourseScene& scene,const std::vector<ScriptChunk>& scripts,unsigned theme,XMFLOAT3 feetOffset,XMFLOAT3 feetRadii):
-    impl(std::make_unique<Impl>(scene,scripts,theme,feetOffset,feetRadii)) {}
+CourseSession::CourseSession(const CourseScene& scene,const std::vector<ScriptChunk>& scripts,unsigned theme,XMFLOAT3 feetOffset,XMFLOAT3 feetRadii,ScriptActorLookup actorLookup):
+    impl(std::make_unique<Impl>(scene,scripts,theme,feetOffset,feetRadii,std::move(actorLookup))) {}
 CourseSession::~CourseSession()=default;
 void CourseSession::tick(CoursePlayer& player,double seconds,bool timerRunning) { impl->tick(player,seconds,timerRunning); }
 bool CourseSession::requestRespawn() { if(!impl->checkpoint)return false;impl->respawnRequested=true;return true; }
@@ -385,5 +390,7 @@ uint64_t CourseSession::checkpointCount() const { return impl->checkpoints; }
 const std::vector<SessionIssue>& CourseSession::issues() const { return impl->issueState; }
 const std::vector<SessionHudControl>& CourseSession::hud() const { return impl->hudState; }
 const std::vector<SessionTriggerState>& CourseSession::triggers() const { return impl->triggerState; }
+const std::vector<ScriptLog>& CourseSession::logs() const { return impl->vm.logs(); }
+uint64_t CourseSession::droppedLogs() const { return impl->vm.droppedLogs(); }
 std::vector<ScriptTask> CourseSession::tasks() const { return impl->vm.tasks(); }
 }

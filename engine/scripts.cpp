@@ -5,7 +5,9 @@
 #include <lualib.h>
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <new>
 
@@ -39,7 +41,7 @@ ScriptValue ScriptObject::call(std::string_view name,std::span<const ScriptValue
     throw std::runtime_error("Unsupported native script method: "+std::string(name));
 }
 struct ScriptVm::Impl {
-    struct Work { ScriptTask state;ScriptContext context;lua_State* thread=nullptr;int reference=LUA_NOREF;uint64_t framesRemaining=0;bool waited=false; };
+    struct Work { ScriptTask state;ScriptContext context;uint64_t owner=0;lua_State* thread=nullptr;int reference=LUA_NOREF;uint64_t framesRemaining=0;bool waited=false; };
     struct HostValue { ScriptObjectPtr object; };
     static constexpr const char* objectType="Doritos.NativeScriptObject";
     lua_State* root=nullptr;
@@ -51,6 +53,8 @@ struct ScriptVm::Impl {
     Work* current=nullptr;
     bool ticking=false;
     std::vector<std::unique_ptr<Work>> work;
+    std::vector<ScriptLog> log;
+    uint64_t dropped=0;
     std::map<std::string,ScriptFunction> functions;
     static void* allocate(void* data,void* pointer,size_t oldSize,size_t size) {
         auto& vm=*static_cast<Impl*>(data);
@@ -93,6 +97,36 @@ struct ScriptVm::Impl {
         vm.current->framesRemaining=std::max(uint64_t(1),static_cast<uint64_t>(frames));
         vm.current->state.wakeTime=vm.clock;vm.current->waited=true;
         return lua_yield(state,0);
+    }
+    size_t cancelDelays(uint64_t ownerId) {
+        size_t count=0;
+        for(auto& task:work)if(task.get()!=current&&task->owner==ownerId&&task->state.status==ScriptStatus::Waiting) {
+            task->state.status=ScriptStatus::Cancelled;++count;
+        }
+        return count;
+    }
+    static int cleanMyDelays(lua_State* state) {
+        // A bare call is the kernel object's inherited CMDBASE method, not a
+        // shorthand for me.CleanMyDelays and not cancellation of all owners.
+        owner(state).cancelDelays(0);lua_pushboolean(state,1);return 1;
+    }
+    static int logMessage(lua_State* state) {
+        try {
+            auto& vm=owner(state);std::string message;
+            // The release binding extracts only a string in argument one;
+            // missing/non-string arguments become empty, extras are ignored.
+            // Its logging call was stripped. Retention here is native telemetry.
+            if(lua_type(state,1)==LUA_TSTRING) {
+                size_t length=0;auto text=lua_tolstring(state,1,&length);
+                if(length>4096)throw std::runtime_error("Native script Log string outside budget");
+                if(auto zero=static_cast<const char*>(std::memchr(text,0,length)))length=size_t(zero-text);
+                message.assign(text,length);
+            }
+            if(vm.log.size()<1024)vm.log.push_back({vm.current?vm.current->state.id:0,vm.current?vm.current->owner:0,vm.clock,std::move(message)});
+            else if(vm.dropped!=UINT64_MAX)++vm.dropped;
+            lua_pushboolean(state,1);return 1;
+        } catch(const std::exception& error) { lua_pushstring(state,error.what()); }
+        return lua_error(state);
     }
     static HostValue* host(lua_State* state,int index) {
         if(lua_type(state,index)!=LUA_TUSERDATA||!lua_getmetatable(state,index))return nullptr;
@@ -289,6 +323,8 @@ struct ScriptVm::Impl {
         }
         lua_pushcfunction(state,wait);lua_setglobal(state,"Wait");
         lua_pushcfunction(state,waitFrames);lua_setglobal(state,"WaitFrames");
+        lua_pushcfunction(state,cleanMyDelays);lua_setglobal(state,"CleanMyDelays");
+        lua_pushcfunction(state,logMessage);lua_setglobal(state,"Log");
         // rawget/rawset on _G must obey the same active context as ordinary
         // globals. Other tables retain the standard raw operations.
         lua_pushcfunction(state,rawGet);lua_setglobal(state,"rawget");
@@ -342,7 +378,7 @@ void ScriptVm::validate(std::span<const uint8_t> code,const std::string& name) {
 }
 void ScriptVm::bind(const std::string& name,ScriptFunction function) {
     need(!impl->ticking,"Cannot change script functions during a native callback");
-    need(!name.empty()&&name.size()<=128&&name.find('\0')==std::string::npos&&name!="Wait"&&name!="WaitFrames"&&bool(function),"Invalid native script function binding");
+    need(!name.empty()&&name.size()<=128&&name.find('\0')==std::string::npos&&name!="Wait"&&name!="WaitFrames"&&name!="CleanMyDelays"&&name!="Log"&&bool(function),"Invalid native script function binding");
     Impl::Binding binding{&name};
     if(lua_cpcall(impl->root,Impl::prepareBinding,&binding)) {
         auto message=impl->error(impl->root);lua_pop(impl->root,1);throw std::runtime_error(message);
@@ -351,23 +387,23 @@ void ScriptVm::bind(const std::string& name,ScriptFunction function) {
 }
 void ScriptVm::setGlobal(const std::string& name,const ScriptValue& value) {
     need(!impl->ticking,"Cannot change shared script globals during a native callback");
-    need(!name.empty()&&name.size()<=128&&name.find('\0')==std::string::npos&&name!="Wait"&&name!="WaitFrames"&&name!="_G","Invalid native script global name");
+    need(!name.empty()&&name.size()<=128&&name.find('\0')==std::string::npos&&name!="Wait"&&name!="WaitFrames"&&name!="CleanMyDelays"&&name!="Log"&&name!="_G","Invalid native script global name");
     Impl::Global global{&name,&value};
     if(lua_cpcall(impl->root,Impl::prepareGlobal,&global)) {
         auto message=impl->error(impl->root);lua_pop(impl->root,1);throw std::runtime_error(message);
     }
 }
-uint64_t ScriptVm::start(std::span<const uint8_t> code,const std::string& name,ScriptContext context) {
+uint64_t ScriptVm::start(std::span<const uint8_t> code,const std::string& name,ScriptContext context,uint64_t owner) {
     need(!impl->ticking,"Queue new script tasks after the native callback completes");
     need(!code.empty()&&code.size()<=16*1024*1024&&impl->work.size()<4096,"Native script task budget exceeded");
     need(context.size()<=128,"Native script context outside budget");
     for(auto& [key,value]:context) {
-        need(!key.empty()&&key.size()<=128&&key.find('\0')==std::string::npos&&key!="_G"&&key!="Wait"&&key!="WaitFrames","Invalid native script context name");
+        need(!key.empty()&&key.size()<=128&&key.find('\0')==std::string::npos&&key!="_G"&&key!="Wait"&&key!="WaitFrames"&&key!="CleanMyDelays"&&key!="Log","Invalid native script context name");
         if(auto number=std::get_if<double>(&value))need(std::isfinite(*number),"Nonfinite native script context value");
         if(auto text=std::get_if<std::string>(&value))need(text->size()<=4096,"Native script context string outside budget");
     }
     auto task=std::make_unique<Impl::Work>();task->state.id=impl->next++;task->state.wakeTime=impl->clock;
-    task->context=std::move(context);
+    task->context=std::move(context);task->owner=owner;
     Impl::Creation creation{task.get(),code,&name};
     if(lua_cpcall(impl->root,Impl::prepareTask,&creation)) {
         task->state.status=ScriptStatus::Failed;task->state.error=impl->error(impl->root);lua_pop(impl->root,1);
@@ -375,6 +411,7 @@ uint64_t ScriptVm::start(std::span<const uint8_t> code,const std::string& name,S
     auto id=task->state.id;impl->work.push_back(std::move(task));return id;
 }
 const ScriptContext* ScriptVm::currentContext() const noexcept { return impl->current?&impl->current->context:nullptr; }
+size_t ScriptVm::cancelDelays(uint64_t owner) { return impl->cancelDelays(owner); }
 void ScriptVm::tick(double seconds) {
     need(!impl->ticking,"Native script scheduler is not reentrant");
     need(std::isfinite(seconds)&&seconds>=0&&seconds<=1,"Invalid native script time step");
@@ -398,12 +435,15 @@ std::vector<ScriptTask> ScriptVm::tasks() const {
 }
 void ScriptVm::clearFinished() {
     need(!impl->ticking,"Cannot remove native script tasks during a callback");
-    for(auto& task:impl->work)if(task->state.status==ScriptStatus::Complete||task->state.status==ScriptStatus::Failed) {
+    for(auto& task:impl->work)if(task->state.status==ScriptStatus::Complete||task->state.status==ScriptStatus::Failed||task->state.status==ScriptStatus::Cancelled) {
         luaL_unref(impl->root,LUA_REGISTRYINDEX,task->reference);
         task->reference=LUA_NOREF;
     }
-    std::erase_if(impl->work,[&](auto& task) { return task->state.status==ScriptStatus::Complete||task->state.status==ScriptStatus::Failed; });
+    std::erase_if(impl->work,[&](auto& task) { return task->state.status==ScriptStatus::Complete||task->state.status==ScriptStatus::Failed||task->state.status==ScriptStatus::Cancelled; });
     lua_gc(impl->root,LUA_GCCOLLECT,0);
 }
 size_t ScriptVm::memoryUsed() const { return impl->memory; }
+const std::vector<ScriptLog>& ScriptVm::logs() const noexcept { return impl->log; }
+uint64_t ScriptVm::droppedLogs() const noexcept { return impl->dropped; }
+void ScriptVm::clearLogs() { need(!impl->ticking,"Cannot clear native logs during a callback");impl->log.clear();impl->dropped=0; }
 }
