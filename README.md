@@ -4,7 +4,7 @@ A Windows x64 port of **Doritos Crash Course**, with native keyboard, mouse and 
 
 [Build guide](docs/BUILDING.md) · [Character importer](docs/CHARACTERS.md) · [Credits](docs/CREDITS.md)
 
-An [independent native engine rewrite](docs/NATIVE_ENGINE.md) is being developed alongside the working recompiled port. Its separate Direct3D 11 previews support CJ animation, static course/environment rendering, basic movement and a partial native trigger/checkpoint session. Dynamic obstacles, complete graphics effects, remaining movement actions, audio and game flow are still being rewritten. `Launch.cmd` continues to run the working port.
+An [independent native engine rewrite](docs/NATIVE_ENGINE.md) is being developed alongside the working recompiled port. Its separate Direct3D 11 previews support CJ animation, static course/environment rendering, basic movement, stationary conveyor motors and a partial native trigger/checkpoint session. Converted static collision retains owning platform identity; selected conveyor textures scroll on a persistent unscaled effect clock. Dynamic obstacles, complete graphics effects, remaining movement actions, audio and game flow are still being rewritten. `Launch.cmd` continues to run the working port.
 
 ![CJ, the default character](assets/characters/cj/preview.png)
 
@@ -67,6 +67,16 @@ py -3 tools/audit_public_source.py --pak game/data.pak
 ```
 
 The October 19 map sweep used copied saves and test-only unlocks in isolated runs. It covered loading plus brief gameplay on all 15 maps and repeated main-menu returns. Importer verification covers conversion, pack validation, local selection, default CJ and imported characters in USA 1. These checks preserve the user's originals, normal progression and normal character overlay. Private test logs, captures and original data are excluded from the repository.
+
+The independent rewrite has a separate 13-contract CPU/source suite. After building and converting its assets, additional bounded checks are available:
+
+```powershell
+& 'build_native/engine/engine/Release/NativePlatformTests.exe' '<absolute-assets-directory>'
+& 'build_native/engine/engine/Release/NativeConveyorTests.exe' '<absolute-assets-directory>'
+& 'build_native/engine/engine/Release/DoritosNativeEngine.exe' --hidden --verify-conveyors '<absolute-fresh-evidence-directory>' --assets '<absolute-assets-directory>'
+```
+
+Replace the quoted paths; the evidence directory must be new. The GPU command probes four belts in the first USA conveyor section, distinguishes supported exits from air transitions, and records fixed-pose UV pairs at least `.3` effect-clock seconds apart. Synthetic tests cover one-shot air carry, strict jump queues and an ordinary landing delay; the actual probe remains limited to its recorded section and transitions. An original-runtime conveyor comparison has not been collected. The earlier 15-starting-platform checks and the working port's map sweep do not establish full native gameplay parity. See the [native engine scope and commands](docs/NATIVE_ENGINE.md) for remaining slope, dynamic-platform and action-state work.
 
 ## License and credits
 

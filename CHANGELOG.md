@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Extend the independent native preview with authored platform ownership, stationary conveyor motion, buffered jump ordering and scrolling belt materials. The full replacement engine remains in development.
+- Select the authored Europe shader variants when converting course materials.
+
 ## 0.1.0 — 2026-10-19
 
 - Publish the experimental Windows x64 port source and project repository.

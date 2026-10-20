@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <numeric>
 #include <limits>
+#include <set>
 
 namespace Doritos::Engine {
 namespace {
@@ -14,6 +15,22 @@ XMFLOAT3 divide(XMFLOAT3 a,XMFLOAT3 b) { return {a.x/b.x,a.y/b.y,a.z/b.z}; }
 float dot(XMFLOAT3 a,XMFLOAT3 b) { return a.x*b.x+a.y*b.y+a.z*b.z; }
 XMFLOAT3 cross(XMFLOAT3 a,XMFLOAT3 b) { return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x}; }
 bool finite(XMFLOAT3 a) { return std::isfinite(a.x)&&std::isfinite(a.y)&&std::isfinite(a.z); }
+void validateOrientation(const XMFLOAT4X4& m) {
+    for(const auto& row:m.m)for(float value:row)need(std::isfinite(value),"Nonfinite native platform orientation");
+    need(m._14==0&&m._24==0&&m._34==0&&m._41==0&&m._42==0&&m._43==0&&m._44==1,
+         "Native platform orientation contains perspective or translation");
+    std::array<XMFLOAT3,3> rows{{{m._11,m._12,m._13},{m._21,m._22,m._23},{m._31,m._32,m._33}}};
+    for(size_t a=0;a<rows.size();++a)for(size_t b=a;b<rows.size();++b)
+        need(std::abs(dot(rows[a],rows[b])-(a==b?1.f:0.f))<.001f,"Native platform orientation is not orthonormal");
+    need(std::abs(dot(cross(rows[0],rows[1]),rows[2])-1.f)<.001f,"Native platform orientation is not a proper rotation");
+}
+void validatePlatform(const PlatformSurface& surface) {
+    need(!surface.actor.empty()&&surface.actor.size()<=4096&&surface.actor.find('\0')==std::string::npos,"Invalid native platform actor");
+    need(surface.chunk<4096&&surface.ordinal<65536,"Native platform identity exceeds budget");
+    need(std::isfinite(surface.friction)&&surface.friction>=0,"Invalid native platform friction");
+    need(finite(surface.slideVelocity),"Nonfinite native platform slide velocity");
+    validateOrientation(surface.orientation);
+}
 float component(XMFLOAT3 a,int axis) { return axis==0?a.x:axis==1?a.y:a.z; }
 XMFLOAT3 unit(XMFLOAT3 a) { float n=std::sqrt(dot(a,a));return n>1e-12f?scale(a,1/n):XMFLOAT3{}; }
 XMFLOAT3 closestSegment(XMFLOAT3 point,XMFLOAT3 a,XMFLOAT3 b) {
@@ -41,11 +58,45 @@ std::optional<float> quadraticFirst(float a,float b,float c,float maximum) {
     if(t<0||t>maximum)return std::nullopt;return float(t);
 }
 }
-CollisionScene::CollisionScene(std::vector<Triangle> source):triangles(std::move(source)) {
+XMFLOAT3 surfaceVelocity(const PlatformSurface& platform) {
+    validateOrientation(platform.orientation);need(finite(platform.slideVelocity),"Nonfinite native platform slide velocity");
+    auto v=platform.slideVelocity;const auto& m=platform.orientation;
+    XMFLOAT3 result{v.x*m._11+v.y*m._21+v.z*m._31,v.x*m._12+v.y*m._22+v.z*m._32,v.x*m._13+v.y*m._23+v.z*m._33};
+    need(finite(result),"Native platform surface velocity overflow");return result;
+}
+CollisionScene::CollisionScene(std::vector<Triangle> source,std::vector<PlatformSurface> surfaces,std::vector<uint32_t> ownership)
+    :triangles(std::move(source)),platforms(std::move(surfaces)),trianglePlatforms(std::move(ownership)) {
     need(triangles.size()<=1000000,"Native collision geometry exceeds budget");
     for(auto& t:triangles)need(finite(t.a)&&finite(t.b)&&finite(t.c),"Nonfinite collision geometry");
+    need(platforms.size()<=16384,"Native platform count exceeds budget");
+    need(platforms.empty()?trianglePlatforms.empty():trianglePlatforms.size()==triangles.size(),"Native triangle platform ownership mismatch");
+    std::set<uint64_t> identities;
+    for(const auto& surface:platforms) {
+        validatePlatform(surface);
+        need(identities.insert((uint64_t(surface.chunk)<<32)|surface.ordinal).second,"Duplicate native platform identity");
+    }
+    for(auto index:trianglePlatforms)need(index<platforms.size(),"Native triangle has no platform");
     order.resize(triangles.size());std::iota(order.begin(),order.end(),0u);
     if(!order.empty())build(0,uint32_t(order.size()));
+}
+const PlatformSurface& CollisionScene::platform(uint32_t index) const {
+    need(index<platforms.size(),"Native platform index outside table");return platforms[index];
+}
+const PlatformSurface* CollisionScene::platformForTriangle(uint32_t index) const {
+    if(index>=triangles.size()||trianglePlatforms.empty())return nullptr;
+    return &platforms[trianglePlatforms[index]];
+}
+std::optional<std::pair<XMFLOAT3,XMFLOAT3>> CollisionScene::platformBounds(uint32_t index) const {
+    need(index<platforms.size(),"Native platform bounds index outside table");
+    std::optional<std::pair<XMFLOAT3,XMFLOAT3>> result;
+    for(size_t i=0;i<trianglePlatforms.size();++i)if(trianglePlatforms[i]==index)
+        for(auto point:{triangles[i].a,triangles[i].b,triangles[i].c}) {
+            if(!result)result=std::pair{point,point};
+            auto& low=result->first;auto& high=result->second;
+            low={std::min(low.x,point.x),std::min(low.y,point.y),std::min(low.z,point.z)};
+            high={std::max(high.x,point.x),std::max(high.y,point.y),std::max(high.z,point.z)};
+        }
+    return result;
 }
 uint32_t CollisionScene::build(uint32_t first,uint32_t count) {
     Node n;n.first=first;n.count=count;float high=std::numeric_limits<float>::max();n.minimum={high,high,high};n.maximum={-high,-high,-high};
@@ -64,7 +115,7 @@ uint32_t CollisionScene::build(uint32_t first,uint32_t count) {
     }
     return index;
 }
-std::optional<RayHit> CollisionScene::ray(XMFLOAT3 origin,XMFLOAT3 direction,float maximumDistance) const {
+std::optional<RayHit> CollisionScene::ray(XMFLOAT3 origin,XMFLOAT3 direction,float maximumDistance,bool floorOnly) const {
     need(finite(origin)&&finite(direction)&&std::isfinite(maximumDistance)&&maximumDistance>0,"Invalid native collision ray");
     float length=std::sqrt(dot(direction,direction));need(std::isfinite(length)&&length>1e-8f,"Native collision ray has invalid direction length");
     direction={direction.x/length,direction.y/length,direction.z/length};
@@ -83,6 +134,7 @@ std::optional<RayHit> CollisionScene::ray(XMFLOAT3 origin,XMFLOAT3 direction,flo
         auto n=nodes[stack.back()];stack.pop_back();if(!box(n))continue;
         if(!n.count) { stack.push_back(n.left);stack.push_back(n.right);continue; }
         for(uint32_t i=n.first;i<n.first+n.count;++i) {
+            if(floorOnly)if(const auto* surface=platformForTriangle(order[i]);surface&&!surface->useForFloor)continue;
             auto& t=triangles[order[i]];auto ab=sub(t.b,t.a),ac=sub(t.c,t.a),p=cross(direction,ac);float determinant=dot(ab,p);
             if(std::abs(determinant)<1e-8f)continue;
             auto offset=sub(origin,t.a);float u=dot(offset,p)/determinant;if(u<0||u>1)continue;
@@ -167,15 +219,33 @@ CollisionMove CollisionScene::moveEllipsoid(XMFLOAT3 origin,XMFLOAT3 radii,XMFLO
     return result;
 }
 std::vector<CourseCollision> loadCollision(const std::filesystem::path& path) {
-    AssetReader input(path);need(input.read<uint32_t>()==0x31434e44&&input.read<uint32_t>()==1,"Unsupported native collision asset");
+    AssetReader input(path);need(input.read<uint32_t>()==0x31434e44,"Unsupported native collision asset");
+    auto version=input.read<uint32_t>();need(version==1||version==2,"Unsupported native collision version");
     auto courses=input.count(15);need(courses==15,"Native collision asset requires 15 courses");std::array<bool,15> used{};std::vector<CourseCollision> result;
-    uint64_t total=0;
+    uint64_t total=0,totalPlatforms=0;
     for(uint32_t i=0;i<courses;++i) {
-        auto id=input.count(14);need(!used[id],"Duplicate collision course");used[id]=true;auto count=input.count(1000000);
+        auto id=input.count(14);need(!used[id],"Duplicate collision course");used[id]=true;
+        std::vector<PlatformSurface> platforms;std::vector<uint32_t> ownership;
+        if(version>=2) {
+            auto count=input.count(16384);totalPlatforms+=count;need(totalPlatforms<=65536,"Native total platform count exceeds budget");
+            platforms.reserve(count);
+            for(uint32_t j=0;j<count;++j) {
+                PlatformSurface surface;surface.actor=input.string();surface.chunk=input.count(4095);surface.ordinal=input.count(65535);
+                auto flags=input.count(7);surface.useForFloor=(flags&1)!=0;surface.slidable=(flags&2)!=0;surface.conveyor=(flags&4)!=0;
+                surface.friction=input.number();surface.slideVelocity=input.vector();
+                for(auto& row:surface.orientation.m)for(auto& value:row)value=input.number();
+                platforms.push_back(std::move(surface));
+            }
+        }
+        auto count=input.count(1000000);
         total+=count;need(total<=1000000,"Native collision total exceeds budget");
         std::vector<Triangle> triangles;triangles.reserve(count);
-        for(uint32_t j=0;j<count;++j) { Triangle t;t.a=input.vector();t.b=input.vector();t.c=input.vector();triangles.push_back(t); }
-        result.push_back({id,CollisionScene(std::move(triangles))});
+        if(version>=2)ownership.reserve(count);
+        for(uint32_t j=0;j<count;++j) {
+            Triangle t;t.a=input.vector();t.b=input.vector();t.c=input.vector();triangles.push_back(t);
+            if(version>=2) { auto owner=input.read<uint32_t>();need(owner<platforms.size(),"Native triangle platform index outside table");ownership.push_back(owner); }
+        }
+        result.push_back({id,CollisionScene(std::move(triangles),std::move(platforms),std::move(ownership))});
     }
     std::sort(result.begin(),result.end(),[](auto& a,auto& b){return a.id<b.id;});input.end();return result;
 }

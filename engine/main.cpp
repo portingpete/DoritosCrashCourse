@@ -42,7 +42,7 @@ void localPath(const std::filesystem::path& path) {
 struct Options {
     std::filesystem::path assets=L"build_native/engine_inputs", evidence;
     bool hidden=false, verify=false, check=false, coursePreview=false, verifyCourses=false;
-    bool coursePlay=false,verifyPlayer=false;
+    bool coursePlay=false,verifyPlayer=false,verifyConveyors=false;
     unsigned level=0;
 };
 Options options(int argc,wchar_t** argv) {
@@ -52,6 +52,7 @@ Options options(int argc,wchar_t** argv) {
         if(argument==L"--hidden")result.hidden=true;
         else if(argument==L"--course-play")result.coursePlay=result.coursePreview=true;
         else if(argument==L"--verify-player" && i+1<argc) { result.verifyPlayer=result.coursePlay=result.coursePreview=result.verify=true;result.evidence=argv[++i]; }
+        else if(argument==L"--verify-conveyors" && i+1<argc) { result.verifyConveyors=result.coursePlay=result.coursePreview=result.verify=true;result.evidence=argv[++i]; }
         else if(argument==L"--course-preview")result.coursePreview=true;
         else if(argument==L"--verify-courses" && i+1<argc) { result.verifyCourses=result.coursePreview=result.verify=true;result.evidence=argv[++i]; }
         else if(argument==L"--check")result.check=true;
@@ -60,7 +61,8 @@ Options options(int argc,wchar_t** argv) {
         else if(argument==L"--level" && i+1<argc) { auto number=std::wstring(argv[++i]); size_t used=0; result.level=std::stoul(number,&used); if(used!=number.size() || result.level>=15)throw std::runtime_error("Course ID must be 0-14"); }
         else throw std::runtime_error("Unknown native engine argument");
     }
-    if((result.coursePlay&&result.verify&&!result.verifyPlayer)||(result.verifyCourses&&result.coursePlay))
+    if((result.coursePlay&&result.verify&&!result.verifyPlayer&&!result.verifyConveyors)||(result.verifyCourses&&result.coursePlay)
+       ||(result.verifyPlayer&&result.verifyConveyors)||(result.verifyConveyors&&result.level!=0))
         throw std::runtime_error("Choose one native verification mode");
     localPath(result.assets);
     if(result.verify) {
@@ -126,6 +128,9 @@ struct Renderer {
     std::array<XMFLOAT4,4> lightDirections{},lightColors{};
     GpuMesh floor;
     uint64_t frames=0,draws=0;
+    // Persistent unscaled kernel/effect time, independent of actor/race resets.
+    double effectTime=0;
+    void advanceEffects(double unscaledDelta) { effectTime=advanceEffectClock(effectTime,unscaledDelta); }
     HFONT font=nullptr;
     explicit Renderer(HWND window) {
         DXGI_SWAP_CHAIN_DESC description{}; description.BufferDesc.Width=1280; description.BufferDesc.Height=720;
@@ -146,7 +151,7 @@ struct Renderer {
 cbuffer Camera : register(b0) { float4x4 worldViewProjection; float4x4 world; float4 tint; float4 properties; float4 ambient; float4 lightDirections[4]; float4 lightColors[4]; };
 struct Input { float3 position:POSITION; float3 normal:NORMAL; float2 uv:TEXCOORD0; };
 struct Output { float4 position:SV_POSITION; float3 normal:NORMAL; float2 uv:TEXCOORD0; };
-Output vertexMain(Input v) { Output o; o.position=mul(float4(v.position,1),worldViewProjection); o.normal=mul(float4(v.normal,0),world).xyz; o.uv=v.uv; return o; }
+Output vertexMain(Input v) { Output o; o.position=mul(float4(v.position,1),worldViewProjection); o.normal=mul(float4(v.normal,0),world).xyz; o.uv=v.uv+properties.yz; return o; }
 Texture2D diffuse:register(t0); SamplerState linearSampler:register(s0);
 float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler,i.uv)*tint; clip(color.a-.02); float3 light=1; if(properties.x>.5) { light=ambient.rgb; float3 normal=normalize(i.normal); [unroll] for(int j=0;j<4;++j)light+=lightColors[j].rgb*saturate(dot(normal,lightDirections[j].xyz)); } return float4(color.rgb*light,color.a); }
 )";
@@ -224,12 +229,12 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
             }
         }
     }
-    void draw(GpuMesh& mesh,FXMMATRIX world,FXMMATRIX viewProjection,uint32_t first=0,uint32_t count=0,XMFLOAT4 tint={1,1,1,1},bool lit=true) {
+    void draw(GpuMesh& mesh,FXMMATRIX world,FXMMATRIX viewProjection,uint32_t first=0,uint32_t count=0,XMFLOAT4 tint={1,1,1,1},bool lit=true,XMFLOAT2 uvOffset={}) {
         struct Camera { XMFLOAT4X4 worldViewProjection,world;XMFLOAT4 tint,properties,ambient;std::array<XMFLOAT4,4> directions,colors; } camera;
         static_assert(sizeof(Camera)==304);
         XMStoreFloat4x4(&camera.worldViewProjection,XMMatrixTranspose(world*viewProjection));
         // Inverse transpose is required for authored nonuniform resource scale.
-        XMStoreFloat4x4(&camera.world,XMMatrixInverse(nullptr,world));camera.tint=tint;camera.properties={lit?1.f:0.f,0,0,0};
+        XMStoreFloat4x4(&camera.world,XMMatrixInverse(nullptr,world));camera.tint=tint;camera.properties={lit?1.f:0.f,uvOffset.x,uvOffset.y,0};
         camera.ambient=ambient;camera.directions=lightDirections;camera.colors=lightColors;
         context->UpdateSubresource(constants.Get(),0,nullptr,&camera,0,0);
         UINT stride=sizeof(DrawVertex),offset=0; context->IASetVertexBuffers(0,1,mesh.vertices.GetAddressOf(),&stride,&offset);
@@ -243,7 +248,7 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
             for(const auto& surface:world.meshes[instance.mesh].surfaces) {
                 const auto& material=world.materials[surface.material];mesh.texture=gpu.textures.at(surface.material);
                 auto tint=material.color;tint.w*=instance.opacity;
-                draw(mesh,XMLoadFloat4x4(&instance.transform),viewProjection,surface.first,surface.count,tint,material.lit);
+                draw(mesh,XMLoadFloat4x4(&instance.transform),viewProjection,surface.first,surface.count,tint,material.lit,materialUvOffset(material,effectTime));
             }
         }
     }
@@ -329,6 +334,151 @@ float4 pixelMain(Output i):SV_TARGET { float4 color=diffuse.Sample(linearSampler
     }
     void present() { check(swapchain->Present(1,0),"Native D3D11 presentation failed"); }
 };
+
+// A bounded probe of the first authored conveyor section. It uses the same
+// player, collision ownership and renderer as course play, with explicit
+// starting positions derived from the converted platform triangles.
+int verifyConveyors(const Options& option,NativeWindow& window,Renderer& renderer,const Model& model,
+                    const World& world,const World& backdrop,const Environment& environment,
+                    CoursePlayer& actor,const CollisionScene& collision) {
+    auto require=[](bool value,const char* message) { if(!value)throw std::runtime_error(message); };
+    struct Belt { uint32_t index;XMFLOAT3 spawn,motor; };
+    std::vector<Belt> belts;uint32_t firstChunk=UINT32_MAX;
+    for(uint32_t i=0;i<collision.platformCount();++i) {
+        const auto& platform=collision.platform(i);auto motor=surfaceVelocity(platform);
+        if(!platform.conveyor||!platform.useForFloor||std::abs(std::abs(motor.x)-3)>.01f)continue;
+        auto bounds=collision.platformBounds(i);if(!bounds)continue;
+        XMFLOAT3 origin{(bounds->first.x+bounds->second.x)*.5f,(bounds->first.y+bounds->second.y)*.5f,bounds->second.z+.5f};
+        auto hit=collision.ray(origin,{0,0,-1},bounds->second.z-bounds->first.z+1,true);
+        if(!hit||hit->normal.z<.99f||collision.platformForTriangle(hit->triangle)!=&platform)continue;
+        if(platform.chunk<firstChunk) { firstChunk=platform.chunk;belts.clear(); }
+        if(platform.chunk==firstChunk)belts.push_back({i,{hit->position.x,hit->position.y,hit->position.z+.05f},motor});
+    }
+    require(belts.size()==4,"First USA conveyor section does not contain four owner-verified belts");
+    require(std::count_if(belts.begin(),belts.end(),[](const auto& value){return value.motor.x>0;})==2,
+            "First USA conveyor section lacks its two opposing motor pairs");
+    std::ofstream trace(option.evidence/L"positions.csv"),report(option.evidence/L"result.json");
+    require(bool(trace)&&bool(report),"Cannot create native conveyor evidence");
+    trace<<"tick,case,platform,chunk,ordinal,x,y,z,vx,vy,vz,relative_x,external_x,surface_x,grounded,on_conveyor,support_triangle,horizontal,pressed,held,effect_time\n"<<std::setprecision(10);
+    uint64_t ticks=0;unsigned captures=0,cases=0,supportedTransitions=0,airTransitions=0;Player player;
+    std::vector<std::pair<double,double>> uvTimes;
+    std::string caseName;const Belt* current=nullptr;
+    auto previous=std::chrono::steady_clock::now();
+    auto render=[&] {
+        require(window.events(),"Conveyor verification window closed early");
+        auto now=std::chrono::steady_clock::now();
+        renderer.advanceEffects(std::chrono::duration<double>(now-previous).count());previous=now;
+        player.position=actor.position;player.velocity=actor.velocity;player.clock=float(actor.clock);player.animation=actor.animation;
+        renderer.frame(model,player,0,&world,actor.position,&actor,&backdrop,&environment.stageForCourse(0));
+    };
+    auto step=[&](CourseInput input=CourseInput{}) {
+        actor.tick(input,1.f/60,collision);++ticks;render();
+        auto relative=actor.relativeVelocity();const auto& platform=collision.platform(current->index);
+        trace<<ticks<<','<<caseName<<','<<current->index<<','<<platform.chunk<<','<<platform.ordinal<<','
+             <<actor.position.x<<','<<actor.position.y<<','<<actor.position.z<<','<<actor.velocity.x<<','<<actor.velocity.y<<','<<actor.velocity.z<<','
+             <<relative.x<<','<<actor.externalVelocity.x<<','<<actor.surfaceVelocity.x<<','<<actor.grounded<<','<<actor.onConveyor<<','
+             <<actor.supportTriangle<<','<<input.horizontal<<','<<input.jumpPressed<<','<<input.jumpHeld<<','<<renderer.effectTime<<'\n';
+        renderer.present();
+    };
+    auto capture=[&](const std::wstring& suffix) {
+        render();renderer.capture(option.evidence/(L"belt-"+std::to_wstring(current->index)+L"-"+suffix+L".bmp"));++captures;renderer.present();
+    };
+    auto reset=[&](const char* name,CourseStart start=CourseStart::Ready) {
+        caseName=name;double effects=renderer.effectTime;actor.reset(current->spawn,start,0);
+        require(renderer.effectTime==effects&&actor.surfaceVelocity.x==0&&actor.externalVelocity.x==0
+                &&actor.supportTriangle==UINT32_MAX,"Conveyor reset retained carry or reset the material clock");
+        for(unsigned i=0;i<120&&!actor.grounded;++i)step();
+        require(actor.grounded&&actor.onConveyor&&collision.platformForTriangle(actor.supportTriangle)==&collision.platform(current->index),
+                "Conveyor starting position acquired another platform");
+        for(unsigned i=0;i<2;++i)step();
+    };
+    auto nearValue=[&](float actual,float expected,float tolerance,const char* message) {
+        require(std::isfinite(actual)&&std::abs(actual-expected)<=tolerance,message);
+    };
+    for(const auto& belt:belts) {
+        current=&belt;float against=belt.motor.x>0?-1.f:1.f;
+        reset("idle");auto begin=actor.position;
+        for(unsigned i=0;i<12;++i)step();
+        require(actor.grounded&&actor.onConveyor,"Idle conveyor probe lost support");
+        nearValue(actor.velocity.x,belt.motor.x,.03f,"Idle conveyor speed differs from its authored motor");
+        nearValue(actor.position.x-begin.x,belt.motor.x*.2f,.015f,"Idle conveyor displacement differs from its authored motor");
+        capture(L"idle");++cases;
+
+        reset("against");
+        for(unsigned i=0;i<16;++i)step({against,false,false});
+        require(actor.grounded&&actor.relativeVelocity().x*against>0,"Against-belt movement lost root motion or support");
+        nearValue(actor.velocity.x,actor.relativeVelocity().x+belt.motor.x+actor.externalVelocity.x,.03f,
+                  "Against-belt velocity did not combine action and surface motion");
+        capture(L"against");++cases;
+
+        float expected=actor.velocity.x*.9f;
+        if(std::abs(expected)<1||expected*belt.motor.x<0)expected+=.2f*belt.motor.x;
+        caseName="fresh-jump";step({0,true,true});
+        require(actor.jumps==1&&!actor.grounded,"Fresh conveyor jump did not dispatch");
+        nearValue(actor.velocity.x,expected,.1f,"Fresh conveyor jump has an incorrect horizontal impulse");
+        require(actor.externalVelocity.x==0&&actor.surfaceVelocity.x==0,"Fresh conveyor jump inherited belt carry twice");
+        for(unsigned i=0;i<6;++i)step({0,false,true});
+        require(actor.jumps==1&&actor.externalVelocity.x==0,"Held conveyor jump duplicated carry");
+        capture(L"jump");++cases;
+
+        reset("buffered-jump",CourseStart::Startup);
+        step({against,true,true});require(actor.jumps==0,"Startup conveyor press jumped before dispatch was eligible");
+        expected=actor.velocity.x*.9f;
+        if(std::abs(expected)<1||expected*belt.motor.x<0)expected+=1.6f*belt.motor.x;
+        step({0,false,true});
+        require(actor.jumps==1&&!actor.grounded,"Buffered conveyor jump did not dispatch on its later action tick");
+        nearValue(actor.velocity.x,expected,.15f,"Buffered conveyor jump has an incorrect horizontal impulse");
+        require(actor.externalVelocity.x==0&&actor.surfaceVelocity.x==0,"Buffered conveyor jump duplicated external carry");
+        capture(L"buffered-jump");++cases;
+
+        reset("belt-transition");
+        for(unsigned i=0;i<240&&actor.grounded&&actor.onConveyor;++i)step();
+        require(!actor.onConveyor&&actor.surfaceVelocity.x==0,"Conveyor probe did not leave the finite belt section");
+        if(actor.grounded) {
+            ++supportedTransitions;
+            require(collision.platformForTriangle(actor.supportTriangle)!=nullptr,"Conveyor exit lost its static platform identity");
+            for(unsigned i=0;i<6;++i) {
+                step();require(actor.grounded&&!actor.onConveyor,"Supported belt exit unexpectedly lost its static floor");
+                nearValue(actor.externalVelocity.x,0,.001f,"Supported belt exit retained external carry");
+                nearValue(actor.velocity.x,0,.03f,"Idle player did not stop on the adjacent static platform");
+            }
+        } else {
+            ++airTransitions;
+            require(actor.externalVelocity.x*belt.motor.x>0&&std::abs(actor.externalVelocity.x)<=std::abs(belt.motor.x)+.01f,
+                    "Walking off a conveyor omitted or duplicated its external carry");
+            float priorCarry=std::abs(actor.externalVelocity.x);
+            for(unsigned i=0;i<6;++i) {
+                step();require(!actor.grounded&&actor.surfaceVelocity.x==0,"Conveyor air-carry probe reached another floor too soon");
+                require(std::abs(actor.externalVelocity.x)<=priorCarry+.001f,"Prior conveyor carry accumulated in successive air spans");
+                priorCarry=std::abs(actor.externalVelocity.x);
+            }
+        }
+        capture(L"belt-transition");++cases;
+
+        reset("reset");nearValue(actor.velocity.x,belt.motor.x,.03f,"Conveyor reset failed to reacquire the motor");
+        capture(L"reset");++cases;
+
+        // Hold simulation and camera still so capture differences isolate the
+        // material clock. This clock continues across every actor reset above.
+        capture(L"uv-0");double uvBegin=renderer.effectTime;
+        auto uvDeadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+        while(renderer.effectTime-uvBegin<.3) {
+            require(std::chrono::steady_clock::now()<uvDeadline,"Conveyor UV capture clock did not advance");
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));render();renderer.present();
+        }
+        capture(L"uv-1");uvTimes.emplace_back(uvBegin,renderer.effectTime);
+    }
+    trace.flush();require(bool(trace),"Cannot finish native conveyor trace");
+    report<<"{\"passed\":true,\"runtime\":\"independent-native\",\"scope\":\"bounded-first-USA-conveyor-section\","
+          <<"\"course\":0,\"chunk\":"<<firstChunk<<",\"platforms\":"<<belts.size()<<",\"cases\":"<<cases
+          <<",\"native_ticks\":"<<ticks<<",\"captures\":"<<captures<<",\"frames\":"<<renderer.frames<<",\"draws\":"<<renderer.draws
+          <<",\"supported_belt_exits\":"<<supportedTransitions<<",\"air_belt_exits\":"<<airTransitions
+          <<",\"effect_time\":"<<renderer.effectTime<<",\"uses_xex\":false,\"uses_guest_memory\":false,\"uv_capture_times\":[";
+    for(size_t i=0;i<uvTimes.size();++i) { if(i)report<<',';report<<'['<<uvTimes[i].first<<','<<uvTimes[i].second<<']'; }report<<"]}\n";
+    require(bool(report),"Cannot finish native conveyor report");
+    std::cout<<"[NATIVE CONVEYORS] platforms="<<belts.size()<<" cases="<<cases<<" ticks="<<ticks<<" captures="<<captures<<" passed=1\n";
+    return 0;
+}
 }
 
 int wmain(int argc,wchar_t** argv) {
@@ -401,6 +551,7 @@ int wmain(int argc,wchar_t** argv) {
             auto hit=collisions[option.level].scene.ray(actor->position,{0,0,-1},10);
             if(!hit)throw std::runtime_error("Native player start has no static floor");baseHeight=hit->position.z;
         }
+        if(option.verifyConveyors)return verifyConveyors(option,window,renderer,model,*world,*backdrop,*environment,*actor,collisions[0].scene);
         Player player; bool previousJump=false,previousTab=false,pendingJump=false,previousRestart=false,scriptHeld=false; unsigned course=option.level,captured=0;
         XMFLOAT3 focus=world?world->courses[course].spawn:XMFLOAT3{};
         float maximumHeight=0; uint64_t ticks=0; float accumulator=0;size_t loggedIssues=0;
@@ -410,6 +561,7 @@ int wmain(int argc,wchar_t** argv) {
         auto previous=std::chrono::steady_clock::now(),deadline=previous;
         while(window.events()) {
             auto now=std::chrono::steady_clock::now(); float elapsed=std::chrono::duration<float>(now-previous).count(); previous=now;
+            renderer.advanceEffects(elapsed);
             accumulator+=std::min(elapsed,.1f); Input input; bool jump=false,tab=false,restart=false;
             float vertical=0;
             if(option.verify && !world) { input.horizontal=player.clock>=2 && player.clock<7?1.f:0.f; jump=player.clock>=4 && player.clock<4.05f; }

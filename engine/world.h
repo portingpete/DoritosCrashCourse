@@ -6,6 +6,7 @@ struct Material {
     std::string name, texture;
     DirectX::XMFLOAT4 color{1,1,1,1};
     bool lit = true, transparent = false;
+    XMFLOAT2 uvSpeed{};
 };
 struct Surface { uint32_t material = 0, first = 0, count = 0; };
 struct StaticMesh {
@@ -22,4 +23,10 @@ struct World {
     std::vector<CourseWorld> courses;
 };
 World loadWorld(const std::filesystem::path& path);
+// UVEffect0 uses signed remainder and PLUS sampling-coordinate motion. The
+// certified path has authored base scale1/offset0; unrelated UV modes differ.
+XMFLOAT2 materialUvOffset(const Material& material,double unscaledKernelTime);
+// Advances before gameplay pause/time scaling. The renderer owns this clock
+// across fighter resets and level changes; only its creation starts at zero.
+double advanceEffectClock(double current,double unscaledDelta);
 }

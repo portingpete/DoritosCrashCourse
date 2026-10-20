@@ -42,6 +42,64 @@ def first(values, name, default=None):
     return values.get(name,[default])[0]
 
 
+def finite_vector(value, size, label):
+    if not isinstance(value,(list,tuple)) or len(value)!=size:
+        raise AssetError(label+' has an invalid vector size')
+    if any(isinstance(v,bool) or not isinstance(v,(int,float)) or not math.isfinite(v) or abs(v)>1e9 for v in value):
+        raise AssetError(label+' contains a nonfinite or out-of-budget number')
+    return list(value)
+
+
+def platform_surface(values, actor, chunk, ordinal):
+    """Keep velocity actor-local; the runtime rotates it with orientation only."""
+    if not 0<=chunk<4096 or not 0<=ordinal<65536:raise AssetError('Platform authored identity outside budget')
+    flags=0
+    for field,bit in (('UseForFloor',1),('SlidablePlatform',2),('IsConveyor',4)):
+        value=first(values,field)
+        if not isinstance(value,bool):raise AssetError('Platform lacks authored boolean '+field)
+        if value:flags|=bit
+    friction=first(values,'Friction')
+    if isinstance(friction,bool) or not isinstance(friction,(int,float)) or not math.isfinite(friction) or not 0<=friction<=1e9:
+        raise AssetError('Platform friction outside budget')
+    slide=finite_vector(first(values,'SlideVelocity'),3,'Platform SlideVelocity')
+    angles=finite_vector(first(values,'Ang',[0,0,0]),3,'Platform orientation')
+    basis=[[1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]]
+    rotation=matrix_product(basis,matrix_product(transform(angles=angles),basis))
+    return {'actor':actor,'chunk':chunk,'ordinal':ordinal,'flags':flags,'friction':friction,
+            'slide_velocity':[slide[0],slide[2],slide[1]],
+            'orientation':[rotation[row][col] for col in range(4) for row in range(4)]}
+
+
+def diffuse_motion(shader):
+    """Match UV motion to the diffuse image the current renderer selects.
+
+    The native renderer implements plain multilayer UV translation. It does not
+    implement the legacy per-layer shifter/effect programs or other UV channels.
+    Return those omissions explicitly instead of applying an unrelated speed.
+    """
+    diffuse=first(shader,'MultilayerDiffuse','')
+    if diffuse:
+        speed=finite_vector(first(shader,'MultilayerUVSpeed',[0,0]),2,'Multilayer UV speed')
+        effect=first(shader,'MultilayerUVEffect',0)
+        if effect!=0:
+            return diffuse,[0,0],0,'unsupported MultilayerUVEffect '+str(effect)
+        return diffuse,speed,0,''
+    names=shader.get('LayersDiffuseName',[])
+    layer=next((i for i,name in enumerate(names) if name),None)
+    if layer is None:return '',[0,0],0,''
+    channels=shader.get('LayersUVChannel',[])
+    channel=channels[layer] if layer<len(channels) else 0
+    reasons=[]
+    if channel!=0:reasons.append('unsupported selected diffuse UV channel '+str(channel))
+    speeds=shader.get('ShifterSpeed',[])
+    if layer<len(speeds) and any(finite_vector(speeds[layer],2,'Selected layer ShifterSpeed')):
+        reasons.append('unsupported selected per-layer ShifterSpeed semantics')
+    effects=shader.get('LayersUVEffect',[])
+    if layer<len(effects) and effects[layer]!=0:
+        reasons.append('unsupported selected LayersUVEffect '+str(effects[layer]))
+    return names[layer],[0,0],channel,'; '.join(reasons)
+
+
 def prepare_world(source, scenes, catalog, output: Path):
     templates={}
     for path,rows in scenes.items():
@@ -49,19 +107,18 @@ def prepare_world(source, scenes, catalog, output: Path):
             templates[path.rsplit('/',1)[-1][:-4]]={r.name:r.values for r in rows}
     meshes, mesh_ids, materials, material_ids, textures = [], {}, [], {}, {}
     repairs={};collision_meshes={};excluded_collision=set()
-    unresolved=set()
+    unresolved=set();unsupported_material_motion={}
     def material(name,theme):
         # Use an authored country variant only if that shader exists.
         shader_templates=templates['shader']
-        theme_name=('usa','europe','japan')[theme]
+        theme_name=('usa','eu','japan')[theme]
         variant=name.replace('/usa/','/'+theme_name+'/')
         if variant in shader_templates: name=variant
         key=(name,theme)
         if key in material_ids:return material_ids[key]
         shader=shader_templates.get(name,{})
-        diffuse=first(shader,'MultilayerDiffuse','')
-        if not diffuse:
-            diffuse=next((v for v in shader.get('LayersDiffuseName',[]) if v),'')
+        diffuse,uv_speed,uv_channel,unsupported=diffuse_motion(shader)
+        if unsupported:unsupported_material_motion[name]=unsupported
         texture=''
         if diffuse:
             descriptor=templates['texture'].get(diffuse,{})
@@ -87,7 +144,7 @@ def prepare_world(source, scenes, catalog, output: Path):
         materials.append({'name':name,'texture':texture,'color':[v/255 for v in tint]+[alpha],
                           'lit':int(first(shader,'Lighting',True)),
                           'transparent':int(bool(first(shader,'Blend',0))),
-                          'uv_channel':int(first(shader,'LayersUVChannel',0))})
+                          'uv_channel':int(uv_channel),'uv_speed':uv_speed})
         return identity
     def mesh(name,theme):
         key=(name,theme)
@@ -122,21 +179,22 @@ def prepare_world(source, scenes, catalog, output: Path):
         values.update(record.values)
         return values
     basis=[[1,0,0,0],[0,0,1,0],[0,1,0,0],[0,0,0,1]]
-    courses=[]
+    courses=[];total_platforms=0
     for course in catalog:
-        instances=[];collision=[];spawn=None;cursor=None;chunk_positions=[];excluded=0
+        instances=[];collision=[];collision_platforms=[];platforms=[];spawn=None;cursor=None;chunk_positions=[];excluded=0
         # The serialized track list is a stack, from finish back to start.
         if course['chunks'][-1]['name']!='common/start_chunk' or course['chunks'][0]['name']!='common/end_chunk':
             raise AssetError('Unexpected course chunk order')
-        for chunk in reversed(course['chunks']):
+        for chunk_ordinal,chunk in enumerate(reversed(course['chunks'])):
             records=scenes[chunk['file']]
             links={first(r.values,'LinkType'):first(r.values,'Pos') for r in records if r.type=='CHUNKLINK'}
             if set(links)!={0,1}:raise AssetError('Course chunk needs unique start and end links')
             offset=[0.,0.,0.] if cursor is None else [a-b for a,b in zip(cursor,links[0])]
             cursor=[a+b for a,b in zip(offset,links[1])]
             chunk_positions.append({'name':chunk['name'],'offset':offset,'start':[a+b for a,b in zip(offset,links[0])],'end':cursor})
-            for record in records:
+            for record_ordinal,record in enumerate(records):
                 v=effective(record)
+                platform_index=None
                 if first(v,'IsTemplate',False):continue
                 if record.type=='STARTPOS' and spawn is None:
                     p=[a+b for a,b in zip(first(v,'Pos',[0,0,0]),offset)];spawn=[p[0],p[2],p[1]]
@@ -172,7 +230,15 @@ def prepare_world(source, scenes, catalog, output: Path):
                             indices=[0,1,3,0,3,2,4,6,7,4,7,5,0,4,5,0,5,1,2,3,7,2,7,6,0,2,6,0,6,4,1,5,7,1,7,3]
                         matrix=matrix_product(basis,matrix_product(actor,local))
                         transformed=[[sum(matrix[row][col]*value for col,value in enumerate(point+[1])) for row in range(3)] for point in vertices]
-                        for start in range(0,len(indices),3):collision.append([transformed[j] for j in indices[start:start+3]])
+                        if indices and platform_index is None:
+                            if len(platforms)>=16384 or total_platforms>=65536:
+                                raise AssetError('Native PLATFORM surface table outside budget')
+                            platform_index=len(platforms)
+                            platforms.append(platform_surface(v,record.name,chunk_ordinal,record_ordinal))
+                            total_platforms+=1
+                        for start in range(0,len(indices),3):
+                            collision.append([transformed[j] for j in indices[start:start+3]])
+                            collision_platforms.append(platform_index)
                         continue
                     opacity=first(v,'Opacity',1)*v.get('ResourcesOpacity',[1]*len(v['Resources']))[i]
                     if opacity<=0:continue
@@ -195,14 +261,17 @@ def prepare_world(source, scenes, catalog, output: Path):
             p=[sum(values[col*4+row]*value for col,value in enumerate(center+[1])) for row in range(3)]
             candidates.append((abs(p[0]-inspection[0]),p))
         if candidates:inspection=min(candidates,key=lambda item:item[0])[1]
-        courses.append({'id':course['id'],'name':course['name'],'spawn':spawn,'inspection':inspection,'instances':instances,'collision':collision,'chunks':chunk_positions,'excluded_attached':excluded})
+        courses.append({'id':course['id'],'name':course['name'],'spawn':spawn,'inspection':inspection,'instances':instances,'collision':collision,
+                        'platforms':platforms,'collision_platforms':collision_platforms,'chunks':chunk_positions,'excluded_attached':excluded})
     # DNW1 is an independent, bounded little-endian format with no guest pointers.
-    binary=bytearray(b'DNW1'+struct.pack('<I',1))
+    binary=bytearray(b'DNW1'+struct.pack('<I',2))
     def string(value):
-        raw=value.encode();binary.extend(struct.pack('<I',len(raw))+raw)
+        raw=value.encode()
+        if len(raw)>4096 or b'\0' in raw:raise AssetError('Native world string outside budget')
+        binary.extend(struct.pack('<I',len(raw))+raw)
     binary.extend(struct.pack('<I',len(materials)))
     for m in materials:
-        string(m['name']);string(m['texture']);binary.extend(struct.pack('<4fII',*m['color'],m['lit'],m['transparent']))
+        string(m['name']);string(m['texture']);binary.extend(struct.pack('<4fII2f',*m['color'],m['lit'],m['transparent'],*m['uv_speed']))
     binary.extend(struct.pack('<I',len(meshes)))
     for m in meshes:
         string(m['name']);binary.extend(struct.pack('<III',len(m['vertices']),len(m['indices']),len(m['groups'])))
@@ -214,15 +283,32 @@ def prepare_world(source, scenes, catalog, output: Path):
         binary.extend(struct.pack('<I6fI',c['id'],*c['spawn'],*c['inspection'],len(c['instances'])))
         for instance in c['instances']:
             string(instance['actor']);binary.extend(struct.pack('<I17f',instance['mesh'],*instance['matrix'],instance['opacity']))
-    collision_binary=bytearray(b'DNC1'+struct.pack('<II',1,len(courses)))
+    collision_binary=bytearray(b'DNC1'+struct.pack('<II',2,len(courses)))
+    def collision_string(value):
+        raw=value.encode()
+        if len(raw)>4096 or b'\0' in raw:raise AssetError('Native platform actor name outside budget')
+        collision_binary.extend(struct.pack('<I',len(raw))+raw)
     for c in courses:
-        collision_binary.extend(struct.pack('<II',c['id'],len(c['collision'])))
-        for triangle in c['collision']:collision_binary.extend(struct.pack('<9f',*(value for point in triangle for value in point)))
+        collision_binary.extend(struct.pack('<II',c['id'],len(c['platforms'])))
+        for platform in c['platforms']:
+            collision_string(platform['actor'])
+            collision_binary.extend(struct.pack('<IIIf3f16f',platform['chunk'],platform['ordinal'],platform['flags'],platform['friction'],
+                                                *platform['slide_velocity'],*platform['orientation']))
+        collision_binary.extend(struct.pack('<I',len(c['collision'])))
+        for triangle,platform in zip(c['collision'],c['collision_platforms']):
+            collision_binary.extend(struct.pack('<9fI',*(value for point in triangle for value in point),platform))
+    if len(binary)>64*1024*1024 or len(collision_binary)>64*1024*1024:
+        raise AssetError('Native world or collision asset exceeds 64 MiB')
     for path,raw in {**textures,'world.dnw':binary,'static-collision.dnc':collision_binary}.items():
         target=output/path;_no_links(target);target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(raw)
-    return {'schema':1,'scope':'Static course inspection; no obstacle simulation, collision or gameplay',
+    return {'schema':2,'world_version':2,'collision_version':2,'scope':'Static course geometry and owning PLATFORM surface metadata; dynamic obstacles remain excluded.',
             'meshes':len(meshes),'materials':len(materials),'textures':len(textures),'bytes':len(binary),
-            'courses':[{k:v for k,v in c.items() if k not in ('instances','collision')}|{'instances':len(c['instances']),'static_collision_triangles':len(c['collision'])} for c in courses],
+            'courses':[{k:v for k,v in c.items() if k not in ('instances','collision','platforms','collision_platforms')}|
+                       {'instances':len(c['instances']),'static_collision_triangles':len(c['collision']),
+                        'static_platforms':len(c['platforms']),'conveyor_platforms':sum(bool(p['flags']&4) for p in c['platforms'])} for c in courses],
             'collision_scope':'Queries against static PLATFORM box/mesh resources. Dynamic, attached and procedural collision is pending.',
             'excluded_collision':sorted(excluded_collision),
+            'unsupported_material_motion':unsupported_material_motion,
+            'animated_materials':[{'name':m['name'],'uv_speed':m['uv_speed']} for m in materials if any(m['uv_speed'])],
+            'collision_bytes':len(collision_binary),'collision_sha256':hashlib.sha256(collision_binary).hexdigest(),
             'source_repairs':repairs,'unresolved':sorted(unresolved),'sha256':hashlib.sha256(binary).hexdigest()}

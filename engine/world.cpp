@@ -3,9 +3,27 @@
 #include <algorithm>
 
 namespace Doritos::Engine {
+double advanceEffectClock(double current,double unscaledDelta) {
+    need(std::isfinite(current)&&current>=0&&std::isfinite(unscaledDelta)&&unscaledDelta>=0,"Invalid native effect clock");
+    double result=current+std::min(unscaledDelta,.05);
+    need(std::isfinite(result),"Native effect clock overflow");return result;
+}
+XMFLOAT2 materialUvOffset(const Material& material,double unscaledKernelTime) {
+    need(std::isfinite(unscaledKernelTime)&&unscaledKernelTime>=0,"Invalid native UV effect time");
+    auto phase=[&](float authoredSpeed) {
+        need(std::isfinite(authoredSpeed),"Nonfinite native UV speed");
+        if(authoredSpeed==0)return 0.f;
+        // Reducing time by the signed reciprocal period matches the original
+        // bounded CPU phase computation and avoids a growing GPU float offset.
+        double speed=authoredSpeed,tau=std::fmod(unscaledKernelTime,1.0/speed);
+        return float(std::fmod(tau*speed,1.0));
+    };
+    return {phase(material.uvSpeed.x),phase(material.uvSpeed.y)};
+}
 World loadWorld(const std::filesystem::path& path) {
     AssetReader input(path);World world;
-    need(input.read<uint32_t>()==0x31574e44 && input.read<uint32_t>()==1,"Unsupported independent world asset");
+    need(input.read<uint32_t>()==0x31574e44,"Unsupported independent world asset");
+    auto version=input.read<uint32_t>();need(version==1||version==2,"Unsupported independent world version");
     auto materials=input.count(1024);need(materials>0,"Empty native material table");
     for(uint32_t i=0;i<materials;++i) {
         Material m;m.name=input.string();m.texture=input.string();
@@ -17,7 +35,9 @@ World loadWorld(const std::filesystem::path& path) {
         }
         m.color={input.number(),input.number(),input.number(),input.number()};
         for(float v:{m.color.x,m.color.y,m.color.z,m.color.w})need(v>=0&&v<=1,"Invalid native material color");
-        m.lit=input.count(1)!=0;m.transparent=input.count(1)!=0;world.materials.push_back(std::move(m));
+        m.lit=input.count(1)!=0;m.transparent=input.count(1)!=0;
+        if(version>=2)m.uvSpeed={input.number(),input.number()};
+        world.materials.push_back(std::move(m));
     }
     uint64_t totalVertices=0,totalIndices=0;
     auto meshes=input.count(2048);
